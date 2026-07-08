@@ -73,6 +73,7 @@ function updateUI() {
   
   document.getElementById('eclipse-date').textContent = formatter.format(new Date(nextEclipse.date));
   document.getElementById('eclipse-region').textContent = nextEclipse.region;
+  document.getElementById('eclipse-type-detail').textContent = nextEclipse.type;
   document.getElementById('eclipse-magnitude').textContent = nextEclipse.magnitude;
 
   requestAnimationFrame(updateUI);
