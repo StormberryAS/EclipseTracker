@@ -7,19 +7,25 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { DATA_FIRST_DAY, DATA_LAST_YEAR, DECADE_COUNTS, ECLIPSES } from '../core/data.js';
-import { eclipseById, groupByYear, matches, nextEclipse, typesFor, upcoming } from '../core/eclipses.js';
+import { DATA_FIRST_DAY, DATA_LAST_YEAR, DECADE_COUNTS, ECLIPSES } from '#core/data.js';
+import { eclipseById, groupByYear, matches, nextEclipse, typesFor, upcoming } from '#core/eclipses.js';
+import type { EclipseKind } from '#core/types.js';
+import { defined } from './helpers.ts';
 
-const nasa = (name) => readFileSync(new URL(`../tools/nasa/${name}`, import.meta.url), 'latin1');
+type Counts = Record<string, Record<EclipseKind, number>>;
+/** The two NASA page families and the kind each lists. */
+const FAMILIES: ReadonlyArray<readonly ['SE' | 'LE', EclipseKind]> = [['SE', 'solar'], ['LE', 'lunar']];
+
+const nasa = (name: string): string => readFileSync(new URL(`../tools/nasa/${name}`, import.meta.url), 'latin1');
 /** NASA's decade tables, named by their first year: 2021 is 2021 to 2030, 2091 is 2091 to 2100. */
 const DECADES = [2021, 2031, 2041, 2051, 2061, 2071, 2081, 2091];
-const MONTHS = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
+const MONTHS: Readonly<Record<string, number>> = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
 
 /** The dates (YYYY-MM-DD) of every row of one NASA decade table. */
-function decadeDates(kind, decade) {
+function decadeDates(kind: string, decade: number): string[] {
   const html = nasa(`${kind}decade_${kind}decade${decade}.html`);
-  const out = [];
-  for (const m of html.matchAll(/target=GLOBE>\s*(\d{4}) (\w{3}) (\d{2})\s*<\/a>/g)) out.push(`${m[1]}-${String(MONTHS[m[2]]).padStart(2, '0')}-${m[3]}`);
+  const out: string[] = [];
+  for (const m of html.matchAll(/target=GLOBE>\s*(\d{4}) (\w{3}) (\d{2})\s*<\/a>/g)) out.push(`${m[1]}-${String(MONTHS[m[2] ?? '']).padStart(2, '0')}-${m[3]}`);
   return out;
 }
 
@@ -27,7 +33,7 @@ test('the archived NASA pages match the SHA-256 recorded when they were fetched'
   const log = readFileSync(new URL('../tools/nasa/FETCHLOG.tsv', import.meta.url), 'utf8').trim().split('\n');
   assert.equal(log.length, 18);
   for (const line of log) {
-    const [when, url, status, name, sha] = line.split('\t');
+    const [when = '', url = '', status, name, sha] = line.split('\t');
     assert.match(when, /^2026-10-16T\d{2}:\d{2}:\d{2}Z$/);
     assert.match(url, /^https:\/\/eclipse\.gsfc\.nasa\.gov\/(SE|LE)(decade|cat5)\//);
     assert.equal(status, '200');
@@ -36,8 +42,8 @@ test('the archived NASA pages match the SHA-256 recorded when they were fetched'
 });
 
 test('the count per decade matches the NASA decade tables, solar and lunar', () => {
-  const want = {};
-  for (const [kind, family] of [['SE', 'solar'], ['LE', 'lunar']]) {
+  const want: Counts = {};
+  for (const [kind, family] of FAMILIES) {
     for (const decade of DECADES) {
       for (const d of decadeDates(kind, decade)) {
         if (d < DATA_FIRST_DAY || Number(d.slice(0, 4)) > DATA_LAST_YEAR) continue;
@@ -47,7 +53,7 @@ test('the count per decade matches the NASA decade tables, solar and lunar', () 
       }
     }
   }
-  const got = {};
+  const got: Counts = {};
   for (const e of ECLIPSES) {
     const y = Number(e.id.slice(0, 4));
     const first = Math.floor((y - 1) / 10) * 10 + 1;
@@ -72,8 +78,8 @@ test('the count per decade matches the NASA decade tables, solar and lunar', () 
 });
 
 test('every NASA decade-table date from 2026-10-16 to 2100 is in the list, and nothing else', () => {
-  const want = new Set();
-  for (const [kind, family] of [['SE', 'solar'], ['LE', 'lunar']]) {
+  const want = new Set<string>();
+  for (const [kind, family] of FAMILIES) {
     for (const decade of DECADES) {
       for (const d of decadeDates(kind, decade)) if (d >= DATA_FIRST_DAY && Number(d.slice(0, 4)) <= DATA_LAST_YEAR) want.add(`${d}-${family}`);
     }
@@ -102,10 +108,12 @@ test('order, ids and the range', () => {
     // (deepEqual: eclipses.js imports data.js with its ?v= stamp, a separate module instance.)
     assert.deepEqual(eclipseById(e.id), e);
   }
-  assert.ok(ECLIPSES[0].id >= DATA_FIRST_DAY);
-  assert.equal(ECLIPSES[0].id, '2027-02-06-solar');
-  assert.equal(ECLIPSES.at(-1).greatest.slice(0, 4), '2100');
-  assert.equal(ECLIPSES.at(-1).id, '2100-09-04-solar');
+  const first = defined(ECLIPSES[0], 'the first eclipse');
+  const final = defined(ECLIPSES.at(-1), 'the last eclipse');
+  assert.ok(first.id >= DATA_FIRST_DAY);
+  assert.equal(first.id, '2027-02-06-solar');
+  assert.equal(final.greatest.slice(0, 4), '2100');
+  assert.equal(final.id, '2100-09-04-solar');
 });
 
 test('types and magnitudes are consistent with each other', () => {
@@ -123,7 +131,7 @@ test('types and magnitudes are consistent with each other', () => {
       assert.equal(typeof e.penMagnitude, 'number');
       if (e.type === 'total') assert.ok(e.magnitude >= 1, e.id);
       if (e.type === 'partial') assert.ok(e.magnitude > 0 && e.magnitude < 1, e.id);
-      if (e.type === 'penumbral') assert.ok(e.magnitude < 0 && e.penMagnitude > 0, e.id);
+      if (e.type === 'penumbral') assert.ok(e.magnitude < 0 && (e.penMagnitude ?? 0) > 0, e.id);
       assert.equal(e.path, '');
       assert.ok(Math.abs(e.gamma) < 1.6);
     }
@@ -131,15 +139,15 @@ test('types and magnitudes are consistent with each other', () => {
 });
 
 test("the magnitude shown is the decade table's own, to 3 decimals; a penumbral one is rounded half up (data review D-5)", () => {
-  const table = new Map();
-  for (const [kind, family] of [['SE', 'solar'], ['LE', 'lunar']]) {
+  const table = new Map<string, string | undefined>();
+  for (const [kind, family] of FAMILIES) {
     for (const decade of DECADES) {
       const html = nasa(`${kind}decade_${kind}decade${decade}.html`);
       for (const tr of html.split(/<tr[^>]*>/).slice(1)) {
-        const cells = [...tr.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+        const cells = [...tr.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => (m[1] ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
         const d = /^(\d{4}) (\w{3}) (\d{2})$/.exec(cells[0] ?? '');
         if (cells.length !== 7 || !d) continue;
-        table.set(`${d[1]}-${String(MONTHS[d[2]]).padStart(2, '0')}-${d[3]}-${family}`, cells[4]);
+        table.set(`${d[1]}-${String(MONTHS[d[2] ?? '']).padStart(2, '0')}-${d[3]}-${family}`, cells[4]);
       }
     }
   }
@@ -148,7 +156,7 @@ test("the magnitude shown is the decade table's own, to 3 decimals; a penumbral 
     assert.match(e.shownMagnitude, /^-?\d+\.\d{3}$/, e.id);
     if (e.type === 'penumbral') {
       // Half up on the catalogue's 4 decimals, in integer arithmetic.
-      const t = Math.round(e.penMagnitude * 10000);
+      const t = Math.round(defined(e.penMagnitude, `${e.id} penMagnitude`) * 10000);
       const want = (Math.floor((t + 5) / 10) / 1000).toFixed(3);
       assert.equal(e.shownMagnitude, want, e.id);
     } else {
@@ -160,13 +168,13 @@ test("the magnitude shown is the decade table's own, to 3 decimals; a penumbral 
   }
   assert.equal(fromTable, 337 - ECLIPSES.filter((e) => e.type === 'penumbral').length);
   // Two the old toFixed(3) got wrong: NASA prints 1.299 (catalogue 1.2995) and 1.049 (1.0495).
-  assert.equal(eclipseById('2036-02-11-lunar').shownMagnitude, '1.299');
-  assert.equal(eclipseById('2064-08-12-solar').shownMagnitude, '1.049');
+  assert.equal(eclipseById('2036-02-11-lunar')?.shownMagnitude, '1.299');
+  assert.equal(eclipseById('2064-08-12-solar')?.shownMagnitude, '1.049');
 });
 
 test('region text: present, British English, house style', () => {
   for (const e of ECLIPSES) {
-    for (const [field, text] of [['region', e.region], ['path', e.path]]) {
+    for (const [field, text] of [['region', e.region], ['path', e.path]] as const) {
       if (field === 'path' && !text) continue;
       assert.ok(text.length > 2, `${e.id} ${field}`);
       assert.doesNotMatch(text, /[–—!]|--/, `${e.id} ${field}: no en or em dash, double hyphen or exclamation mark`);
@@ -199,10 +207,10 @@ test('data/eclipses.json is the same list, for stage B', () => {
 
 test('next, upcoming, filters and year groups', () => {
   const now = Date.parse('2026-10-16T12:00:00Z');
-  assert.equal(nextEclipse(now).id, '2027-02-06-solar');
+  assert.equal(nextEclipse(now)?.id, '2027-02-06-solar');
   // Greatest eclipse 15:59:32 UTC is shown as 16:00; the countdown and the list follow the minute shown (code review C-20).
-  assert.equal(nextEclipse(Date.parse('2027-02-06T15:59:59Z')).id, '2027-02-06-solar', 'still next until the minute shown');
-  assert.equal(nextEclipse(Date.parse('2027-02-06T16:00:00Z')).id, '2027-02-20-lunar', 'at the minute shown it is no longer next');
+  assert.equal(nextEclipse(Date.parse('2027-02-06T15:59:59Z'))?.id, '2027-02-06-solar', 'still next until the minute shown');
+  assert.equal(nextEclipse(Date.parse('2027-02-06T16:00:00Z'))?.id, '2027-02-20-lunar', 'at the minute shown it is no longer next');
   assert.equal(upcoming(Date.parse('2027-02-06T16:00:00Z')).length, 336);
   assert.equal(nextEclipse(Date.parse('2101-01-01T00:00:00Z')), undefined);
   assert.equal(upcoming(now).length, 337);
@@ -218,7 +226,7 @@ test('next, upcoming, filters and year groups', () => {
   assert.deepEqual(typesFor('solar'), ['total', 'annular', 'hybrid', 'partial']);
   const groups = groupByYear(ECLIPSES);
   assert.equal(groups.length, 74);
-  assert.equal(groups[0].year, 2027);
-  assert.equal(groups.at(-1).year, 2100);
+  assert.equal(groups[0]?.year, 2027);
+  assert.equal(groups.at(-1)?.year, 2100);
   assert.equal(groups.reduce((n, g) => n + g.eclipses.length, 0), 337);
 });

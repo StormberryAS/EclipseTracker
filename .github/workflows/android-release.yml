@@ -1,0 +1,404 @@
+name: Android release
+
+# EclipseTracker's release workflow, adapted from CheckLink's (StormberryAS/CheckLink, released
+# 0.0.1 on 15 October 2026 with it): the same two jobs, the same pinned actions, the same order of
+# checks. What differs: nine permissions instead of the camera, no camera feature check, this
+# app's web file list (WebAssets.INCLUDES in android/app/build.gradle.kts), its licences under
+# assets/licences/, its certificate and its file name eclipsetracker-v<version>.apk.
+#
+# Tagged android-v* only, and nothing else starts it: there is no manual run, so no branch can
+# ever reach the signing secrets. The repository also serves the website eclipse.stormberry.as
+# from main through GitHub Pages; the prefix keeps app releases apart from anything else.
+#
+# TWO JOBS, so that build tools never come near the app's signing key or GitHub's signing token:
+#
+#   build    runs the unit tests, the web checks and lint, and has Gradle build the release APK
+#            UNSIGNED. It can only read the repository: no secret, no key, no password, and no
+#            token that can write or sign anything. Gradle, Node and everything they download run
+#            here and nowhere else.
+#
+#   release  runs NO Gradle, no Node and no code from the build. It takes the unsigned APK as
+#            data and checks it BEFORE the key is decoded: exactly the permissions in
+#            android/expected-permissions.txt, not debuggable, the version the tag names, every
+#            web file in it byte for byte against the tagged commit, and the licence texts.
+#            Then it aligns and signs that same file with Google's zipalign and apksigner, using
+#            the permanent key from the "release" environment, and checks the result: one signer,
+#            EclipseTracker's pinned certificate, and the same files as the APK it checked. Only
+#            then does it attest and publish. The tokens that write (contents) and sign the
+#            provenance record (id-token) exist in this job alone.
+#
+# What the split does not cover: the release job signs the code the build job compiled, so a
+# build dependency that went bad could still put its own code into classes.dex. The checks cover
+# the permissions, the manifest's flags and the web files, not the compiled code. The build is
+# reproducible, so a second, independent build can be compared with any release (README.md).
+#
+# SET-UP ON GITHUB, made by the release batch before the first tag and read back by it:
+#   1. Environment "release", deployment rule: tags matching android-v* only, no branch rule.
+#   2. Its secrets: KEYSTORE_BASE64 (the .p12 file, base64), KEYSTORE_PASSWORD, KEY_ALIAS,
+#      KEY_PASSWORD. None of them as a repository secret.
+#   3. Required reviewers on that environment: Marcos's two accounts, so each release waits for
+#      one click on the run's page before the key is handed over.
+#   4. A tag ruleset for android-v*: creation, update and deletion restricted, organisation admins
+#      (Marcos's two accounts) may bypass. GitHub runs the workflow file of the tagged commit, so
+#      without 3 and 4 anyone who could push such a tag could point it at a commit whose release
+#      job sends the key elsewhere.
+on:
+  push:
+    tags: ["android-v*"]
+
+# Nothing by default; each job asks for exactly what it needs.
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: android
+
+    # Every action is pinned to a full commit hash, with its release in the comment. A tag such
+    # as v6 can be moved to other code; a commit hash cannot. To update a pin, resolve the new
+    # release with
+    #   git ls-remote https://github.com/<owner>/<repo>.git 'refs/tags/<tag>*'
+    # and take the ^{} line for an annotated tag. A new release must be at least 14 days old.
+    steps:
+      # No credentials are left in .git/config for the build to find. Only HEAD is needed (the
+      # release check compares the bundled web files with the committed ones), so no history.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # Node 24 for the TypeScript checks below: the compiled JavaScript, the Android bridge
+      # (android-bridge.js, compiled from android-bridge.ts and committed) and the unit tests, which
+      # Node 24 runs directly. v7.0.0 of 14 July 2026 (v7.1.0 of 8 October 2026 was under 14 days
+      # old on 17 October). No npm cache: nothing another run left behind may change what this
+      # build reads. The Gradle build itself never runs Node or tsc.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      # No Gradle cache: nothing another run left behind can change what this build reads.
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-disabled: true
+
+      # The runner ships an Android SDK, but not necessarily platform 37.1, and its bundled
+      # sdkmanager may be too old to know that package exists. Refresh cmdline-tools first.
+      - name: Install SDK packages the runner may not have
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager)"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "cmdline-tools;latest" > /dev/null
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-37.1" "build-tools;36.0.0"
+
+      # tools/build-ts.sh --check installs the pinned TypeScript with npm ci (frozen, no install
+      # scripts) and fails unless app.js, core/*.js and android/web-overlay/android-bridge.js are
+      # byte for byte what their TypeScript compiles to (stamps aside), the tests type-check, the
+      # eclipse list is what the archived NASA pages give and every ?v= stamp is current. Its two
+      # data checks are the repository's own Python scripts (python3 is on the runner). Then the
+      # unit tests, among them S-1: the only JavaScript in the repository is that compiled output.
+      - name: Check the compiled TypeScript and run the unit tests
+        working-directory: .
+        run: |
+          set -euo pipefail
+          node --version
+          tools/build-ts.sh --check
+          node --test tests/*.test.ts
+
+      # verifyWebAssets fails unless every bundled web file is byte-identical to the one GitHub
+      # Pages serves (index.html may differ only by the single injected bridge line);
+      # verifyWebAssetsCommitted fails unless each also equals the copy in the tagged commit (on a
+      # CI runner it also fails when there is no git checkout). The unit tests include the Kotlin
+      # port of the alarm planner against the website's own test vectors.
+      - name: Test, check the bundled web app and lint
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:verifyWebAssets :app:verifyWebAssetsCommitted :app:lintRelease
+
+      # -PunsignedRelease=true is the only way the build makes a release APK without signing it,
+      # and the build refuses it if a signing password is anywhere in reach.
+      - name: Build the release APK, unsigned
+        run: ./gradlew --no-daemon -PunsignedRelease=true :app:assembleRelease
+
+      # Only the APK leaves this job. The release job checks everything else against the tagged
+      # commit itself, so nothing else the build wrote is trusted.
+      - name: Make sure it is unsigned, and set it aside
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/release/app-release-unsigned.apk
+          [ -s "$APK" ] || { echo "::error::$APK was not built"; exit 1; }
+          if "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$APK" > /dev/null 2>&1; then
+            echo "::error::the build job made a signed APK; it must never hold a key"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/handover"
+          cp "$APK" "$RUNNER_TEMP/handover/eclipsetracker-unsigned.apk"
+          sha256sum "$RUNNER_TEMP/handover/eclipsetracker-unsigned.apk"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: eclipsetracker-unsigned
+          path: ${{ runner.temp }}/handover/eclipsetracker-unsigned.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/android-v')
+    runs-on: ubuntu-latest
+    # The signing secrets live in this environment, which only android-v* tags may use, and
+    # which waits for one of the required reviewers before this job starts.
+    environment: release
+    permissions:
+      contents: write        # create the release
+      id-token: write        # sign the provenance attestation
+      attestations: write    # publish it
+    defaults:
+      run:
+        working-directory: android
+
+    # No Gradle, no Node, no setup-gradle and no build output but the APK. Every tool here is
+    # Google's (zipalign, apksigner, aapt2 from build-tools 36.0.0) or the runner's own.
+    steps:
+      # The tagged commit, for expected-permissions.txt and the web files the APK must carry
+      # byte for byte. Nothing in it is run.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install build-tools 36.0.0 (zipalign, apksigner, aapt2)
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager)"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "build-tools;36.0.0"
+          for t in zipalign apksigner aapt2; do
+            [ -x "$ANDROID_HOME/build-tools/36.0.0/$t" ] || { echo "::error::build-tools 36.0.0 has no $t"; exit 1; }
+          done
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: eclipsetracker-unsigned
+          path: ${{ runner.temp }}/handover
+
+      # Everything about what the APK holds is checked BEFORE the key is decoded, on the very file
+      # the build job handed over: a bad APK never comes near the key.
+      - name: Check the unsigned APK (permissions, debuggable, version, web files and licences)
+        run: |
+          set -euo pipefail
+          APK="$RUNNER_TEMP/handover/eclipsetracker-unsigned.apk"
+          AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+
+          # FAIL CLOSED, in both directions (SunApp's rule): `dump permissions` must print exactly
+          # what android/expected-permissions.txt holds, the package line and the nine alarm
+          # permissions. A vanished RECEIVE_BOOT_COMPLETED fails as loudly as an extra permission,
+          # because it would silently lose every alarm at the next restart. An aapt2 that cannot
+          # read the APK stops on its exit status before the comparison.
+          DUMP=$("$AAPT" dump permissions "$APK")
+          EXPECTED_PERMISSIONS=$(cat expected-permissions.txt)
+          if [ "$DUMP" != "$EXPECTED_PERMISSIONS" ]; then
+            echo "::error::APK permissions differ from android/expected-permissions.txt"
+            echo "expected:"; printf '%s\n' "$EXPECTED_PERMISSIONS"
+            echo "actual:";   printf '%s\n' "$DUMP"
+            exit 1
+          fi
+          if printf '%s\n' "$DUMP" | grep -q "android.permission.INTERNET"; then
+            echo "::error::the APK asks for INTERNET"; exit 1
+          fi
+          echo "Verified: exactly the $(printf '%s\n' "$DUMP" | grep -c '^uses-permission') permissions in expected-permissions.txt, no INTERNET."
+
+          # A release build must never be debuggable.
+          BADGING=$("$AAPT" dump badging "$APK")
+          if printf '%s\n' "$BADGING" | grep -q "^application-debuggable"; then
+            echo "::error::the release APK is debuggable"
+            exit 1
+          fi
+          echo "Verified: not debuggable."
+
+          # A tag must match the version inside the APK, or the release would publish a misnamed
+          # binary that Zapstore cannot offer as an update.
+          VERSION_NAME=$(printf '%s\n' "$BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)
+          VERSION_CODE=$(printf '%s\n' "$BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p" | head -1)
+          echo "APK versionName $VERSION_NAME, versionCode $VERSION_CODE"
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            if [ "v$VERSION_NAME" != "${GITHUB_REF_NAME#android-}" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match the APK's versionName $VERSION_NAME; bump versionName and versionCode in android/app/build.gradle.kts"
+              exit 1
+            fi
+            echo "Verified: tag matches versionName."
+          fi
+
+          # The licence texts, outside assets/web/: the app's own MIT licence, the Apache License
+          # for the AndroidX and Kotlin libraries, Inter's OFL and THIRD-PARTY.txt, which lists them.
+          for f in Apache-2.0.txt EclipseTracker-MIT.txt Inter-OFL-1.1.txt THIRD-PARTY.txt; do
+            unzip -l "$APK" "assets/licences/$f" > /dev/null || { echo "::error::assets/licences/$f missing from the APK"; exit 1; }
+          done
+          unzip -p "$APK" assets/licences/EclipseTracker-MIT.txt | cmp -s - ../LICENSE \
+            || { echo "::error::assets/licences/EclipseTracker-MIT.txt is not the tagged LICENSE"; exit 1; }
+          echo "Verified: the four licence texts are bundled; the app's own is the tagged LICENSE."
+
+          # EVERY web file, byte for byte, against the tagged commit and not against anything the
+          # build job wrote. The expected set is the app's include list (WebAssets.INCLUDES minus
+          # WebAssets.LEFT_OUT in android/app/build.gradle.kts) read from this checkout, plus the
+          # bridge script. assets/web/ must hold exactly that set; each file must equal the
+          # commit's copy, index.html apart from the one injected bridge line, and
+          # android-bridge.js must equal android/web-overlay/android-bridge.js.
+          # android-bridge.js is committed: the build job proved it is what android-bridge.ts
+          # compiles to, and here the APK's copy must equal that committed file.
+          shopt -s globstar nullglob
+          EXPECTED_WEB=$(cd .. && for f in index.html app.js style.css favicon.svg disclaimer.html \
+                                         core/*.js data/eclipses.json \
+                                         fonts/**/*.css fonts/**/*.woff2 switcher-icons/*.svg; do
+                           case "$f" in core/api.js|core/types.js) continue ;; esac
+                           [ -f "$f" ] && printf '%s\n' "$f"
+                         done; echo android-bridge.js)
+          EXPECTED_WEB=$(printf '%s\n' "$EXPECTED_WEB" | sort -u)
+          IN_APK=$(unzip -Z1 "$APK" | sed -n 's#^assets/web/##p' | grep -v '/$' | sort -u)
+          if [ "$EXPECTED_WEB" != "$IN_APK" ]; then
+            echo "::error::the APK's web files are not exactly the tagged website's"
+            diff <(printf '%s\n' "$EXPECTED_WEB") <(printf '%s\n' "$IN_APK") || true
+            exit 1
+          fi
+          TAG_LINE='<script src="android-bridge.js"></script>'
+          WEB_FILES=0
+          while IFS= read -r f; do
+            case "$f" in
+              android-bridge.js)
+                unzip -p "$APK" "assets/web/$f" | cmp -s - web-overlay/android-bridge.js \
+                  || { echo "::error::assets/web/android-bridge.js differs from android/web-overlay"; exit 1; } ;;
+              index.html)
+                [ "$(unzip -p "$APK" assets/web/index.html | grep -cx "[[:space:]]*$TAG_LINE")" = 1 ] \
+                  || { echo "::error::index.html must carry the bridge line exactly once"; exit 1; }
+                unzip -p "$APK" assets/web/index.html | grep -vx "[[:space:]]*$TAG_LINE" | cmp -s - ../index.html \
+                  || { echo "::error::index.html differs from the tagged one by more than the bridge line"; exit 1; } ;;
+              *)
+                unzip -p "$APK" "assets/web/$f" | cmp -s - "../$f" \
+                  || { echo "::error::assets/web/$f differs from the tagged commit"; exit 1; } ;;
+            esac
+            WEB_FILES=$((WEB_FILES + 1))
+          done <<< "$IN_APK"
+          echo "Verified: all $WEB_FILES web files are the tagged website's, byte for byte (index.html apart from the bridge line)."
+
+          # The file the next steps sign must be this one.
+          sha256sum "$APK" > "$RUNNER_TEMP/checked.sha256"
+
+      # The keystore is decoded into RUNNER_TEMP, outside the workspace, so no artifact glob or
+      # accidental `git add` can ever pick it up, and it is shredded straight after.
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
+
+      # zipalign first: the APK Signature Scheme covers the whole file, so nothing may move after
+      # signing. The passwords reach apksigner as environment variables, never on its command
+      # line. v1 (JAR) signing is off because minSdk 24 makes it dead weight, v2 covers Android
+      # 7.0 and later, and v3 keeps key rotation possible later.
+      - name: Align and sign with apksigner
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          IN="$RUNNER_TEMP/handover/eclipsetracker-unsigned.apk"
+          sha256sum -c --quiet "$RUNNER_TEMP/checked.sha256"
+          "$BUILD_TOOLS/zipalign" -f 4 "$IN" "$RUNNER_TEMP/aligned.apk"
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks "$RUNNER_TEMP/release.p12" --ks-type PKCS12 \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD \
+            --v1-signing-enabled false --v2-signing-enabled true \
+            --v3-signing-enabled true --v4-signing-enabled false \
+            --out "$RUNNER_TEMP/eclipsetracker-release.apk" "$RUNNER_TEMP/aligned.apk"
+          rm -f "$RUNNER_TEMP/aligned.apk"
+
+      - name: Remove keystore
+        if: always()
+        run: shred -u "$RUNNER_TEMP/release.p12" || rm -f "$RUNNER_TEMP/release.p12"
+
+      # Fails the release if signing went wrong, if the certificate is not the pinned one, or if
+      # aligning and signing changed, added or dropped any file of the APK checked above.
+      - name: Verify signature and certificate, and that signing changed no file
+        run: |
+          set -euo pipefail
+          APK="$RUNNER_TEMP/eclipsetracker-release.apk"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+
+          "$BUILD_TOOLS/zipalign" -c 4 "$APK" > /dev/null || { echo "::error::the APK is not aligned"; exit 1; }
+          CERTS=$("$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK")
+          printf '%s\n' "$CERTS"
+
+          # Exactly one signer, so the pin below speaks for the whole APK.
+          if ! printf '%s\n' "$CERTS" | grep -qx 'Number of signers: 1'; then
+            echo "::error::the APK must have exactly one signer"
+            exit 1
+          fi
+
+          # PIN THE SIGNING CERTIFICATE, do not merely check that one exists. apksigner's exit
+          # status catches an UNSIGNED apk, but an apk validly signed with the WRONG key passes it
+          # and reaches the release. Android enforces certificate continuity, so publishing under
+          # the wrong key permanently forks the install base: existing users would get
+          # INSTALL_FAILED_UPDATE_INCOMPATIBLE and the only fix is uninstalling.
+          # EclipseTracker's own key (one key per app), created 17 October 2026:
+          # ~/.android-keys/stormberry-eclipsetracker-release.p12, alias release.
+          EXPECTED_CERT=0d7d023957a40dc8471e9c476eb1468b05604c3634c5b4c440971145fcbe2ae4
+          ACTUAL_CERT=$(printf '%s\n' "$CERTS" \
+            | grep -i 'certificate SHA-256 digest' | head -1 | awk '{print $NF}')
+          if [ "$ACTUAL_CERT" != "$EXPECTED_CERT" ]; then
+            echo "::error::signing certificate mismatch"
+            echo "  expected $EXPECTED_CERT"
+            echo "  actual   $ACTUAL_CERT"
+            exit 1
+          fi
+          echo "Signing certificate matches the pinned fingerprint."
+
+          # The same files as the APK checked before signing: each name, size, CRC-32 and
+          # compression, in the same order (v1 signing is off, so nothing is added to META-INF).
+          python3 - "$RUNNER_TEMP/handover/eclipsetracker-unsigned.apk" "$APK" <<'PY'
+          import sys, zipfile
+          entries = [[(i.filename, i.file_size, i.CRC, i.compress_type) for i in zipfile.ZipFile(p).infolist()] for p in sys.argv[1:3]]
+          if entries[0] != entries[1]:
+              print("::error::signing changed the files of the APK that was checked")
+              sys.exit(1)
+          print(f"Verified: the signed APK holds the same {len(entries[1])} files as the APK checked before signing.")
+          PY
+
+      # Lets anyone prove this exact binary came out of this repository and this run:
+      #   gh attestation verify eclipsetracker-v2.0.0.apk -R StormberryAS/EclipseTracker
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/eclipsetracker-release.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Strips only the "android-" prefix, so the tag android-v2.0.0 yields v2.0.0 and the
+          # asset carries the v: eclipsetracker-v2.0.0.apk. Keep this in step with the `match`
+          # pattern in zapstore.yaml: match: "eclipsetracker-.*\\.apk$"
+          VERSION="${GITHUB_REF_NAME#android-}"
+          cp "$RUNNER_TEMP/eclipsetracker-release.apk" "eclipsetracker-${VERSION}.apk"
+          sha256sum "eclipsetracker-${VERSION}.apk" > "eclipsetracker-${VERSION}.apk.sha256"
+          gh release create "$GITHUB_REF_NAME" \
+            "eclipsetracker-${VERSION}.apk" \
+            "eclipsetracker-${VERSION}.apk.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "EclipseTracker for Android ${VERSION}" \
+            --generate-notes

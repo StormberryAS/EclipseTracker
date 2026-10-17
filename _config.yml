@@ -25,6 +25,11 @@
 # The Android app (EclipseTracker 2.0 stage B, staged 2026-10-16): its Gradle project lives in
 # android/ beside the website, as GDPRLetterBuilder's does, and is never published; its build copies
 # the published files into the APK byte for byte and checks them against this list.
+#
+# The Zapstore listing (EclipseTracker for Android 2.0.0, 17 October 2026): zapstore.yaml and the
+# store texts, icon and screenshots in fastlane/ are for zsp, the Zapstore publisher, which reads
+# them from the repository; they are not part of the website. .github/ is left out by Jekyll on its
+# own (a dot folder).
 exclude:
   - DISCLAIMER.md
   - LICENSE
@@ -40,3 +45,5 @@ exclude:
   - tools/
   - tests/
   - android/
+  - fastlane/
+  - zapstore.yaml

@@ -22,7 +22,9 @@ plugins {
 // come from the RELEASE_STORE_PASSWORD and RELEASE_KEY_PASSWORD Gradle properties, which
 // Gradle also reads from ORG_GRADLE_PROJECT_* env vars (CI) and which a local build passes
 // as env vars read from the keyring. Missing credentials must not break assembleDebug, so
-// everything below is optional. No release key exists for this app yet (a step with Marcos).
+// everything below is optional. The release key is ~/.android-keys/stormberry-eclipsetracker-release.p12
+// (created 17 October 2026, certificate SHA-256 0d7d0239...2ae4); the release workflow signs the
+// unsigned APK with apksigner from the release environment's secrets, never through Gradle.
 val keystorePropertiesFile = rootProject.file("keystore.properties")
 val keystoreProperties = Properties().apply {
     if (keystorePropertiesFile.exists()) FileInputStream(keystorePropertiesFile).use { load(it) }
@@ -128,7 +130,7 @@ android {
         targetSdk = 36
         // 2.0.0 (code 20000): the first Android build (stage B, 16 October 2026), with the
         // website's version (2.0, VER-1). Codes follow major * 10000 + minor * 100 + patch, so
-        // 2.0.1 is 20001 and 2.1.0 is 20100. Not released yet.
+        // 2.0.1 is 20001 and 2.1.0 is 20100. First released on Zapstore as 2.0.0.
         versionCode = 20000
         versionName = "2.0.0"
 

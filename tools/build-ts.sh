@@ -12,7 +12,9 @@
 #                               included: it compiles to an empty module) into the .js of the same
 #                               path at the repository root (ts/app.ts -> app.js, ts/core/x.ts ->
 #                               core/x.js), then run bump_assets.py so every import and every page
-#                               carries the current ?v= stamp
+#                               carries the current ?v= stamp; and compile the Android app's bridge
+#                               script, android/web-overlay/android-bridge.ts, into
+#                               android-bridge.js beside it (a classic script, never published)
 #   tools/build-ts.sh --force   the same, but overwrite a compiled .js even when it holds a hand edit
 #   tools/build-ts.sh --check   change nothing: fail when a compiled .js is missing, is not tracked
 #                               by git, or is not (stamps aside) byte for byte what ts/ compiles to;
@@ -22,6 +24,17 @@
 #                               when a page or an import carries a stale ?v=; or when the eclipse
 #                               list (ts/core/data.ts, data/eclipses.json) is not what the archived
 #                               NASA pages in tools/nasa/ give
+#
+# The Android bridge script (since 17 October 2026, when it moved from hand-written JavaScript to
+# TypeScript) is compiled with its own android/web-overlay/tsconfig.json: a classic script, not a
+# module, type-checked against the page's contract (ts/app-host.d.ts) and core/. That program also
+# pulls in ts/core/*.ts for their types, so it is emitted into a scratch folder and only
+# android-bridge.js is taken from it. It is checked and guarded like the page's compiled files (it
+# has no ?v= stamps). The Android build bundles android-bridge.js and never runs tsc itself.
+#
+# Every mode also type-checks the tests (tests/*.ts, run by Node 24 directly since 17 October 2026)
+# with tests/tsconfig.json, strict; it writes nothing, and a test that does not type-check fails
+# the build and the check.
 #
 # Every mode first type-checks ts/core/ on its own with tsconfig.core.json, whose only library is
 # ES2020: no DOM. core/ is what stage B's Kotlin port copies and what Node tests run, so a browser
@@ -73,6 +86,7 @@ nsha() { normalise "$1" | sha256sum | cut -d' ' -f1; }
 
 "${TSC[@]}" -p "$ROOT/tsconfig.core.json" \
   || die "ts/core/ uses something only a browser has (see above): core/ stays free of the DOM; nothing was written"
+"${TSC[@]}" -p "$ROOT/tests/tsconfig.json" || die "the tests (tests/*.ts) do not type-check; nothing was written"
 "${TSC[@]}" -p "$ROOT/tsconfig.json" --outDir "$tmp/out" || die "ts/ does not compile; nothing was written"
 
 mapfile -t OUTPUTS < <(cd "$tmp/out" && find . -type f -printf '%P\n' | LC_ALL=C sort)
@@ -80,6 +94,18 @@ mapfile -t EXPECTED < <(cd ts && find . -type f -name '*.ts' ! -name '*.d.ts' -p
 [ "${#OUTPUTS[@]}" -gt 0 ] || die "tsc emitted nothing"
 [ "${OUTPUTS[*]}" = "${EXPECTED[*]}" ] \
   || die "tsc emitted [${OUTPUTS[*]}] but ts/ holds sources for [${EXPECTED[*]}]; look at tsconfig.json"
+
+# The Android bridge script: its own program, of which only android-bridge.js is kept.
+BRIDGE=android/web-overlay/android-bridge.js
+"${TSC[@]}" -p "$ROOT/android/web-overlay/tsconfig.json" --noEmit false --outDir "$tmp/bridge" \
+  || die "android/web-overlay/android-bridge.ts does not compile; nothing was written"
+[ -f "$tmp/bridge/$BRIDGE" ] || die "tsc did not emit $BRIDGE; look at android/web-overlay/tsconfig.json"
+mkdir -p "$tmp/out/$(dirname "$BRIDGE")"
+cp "$tmp/bridge/$BRIDGE" "$tmp/out/$BRIDGE"
+OUTPUTS+=("$BRIDGE")
+
+# Where each compiled file comes from, for the messages.
+source_of() { if [ "$1" = "$BRIDGE" ]; then echo "${BRIDGE%.js}.ts"; else echo "ts/"; fi; }
 
 tracked() { [ "$GIT" = 1 ] && git ls-files --error-unmatch -- "$1" >/dev/null 2>&1; }
 
@@ -90,11 +116,11 @@ if [ "$MODE" = check ]; then
     if [ ! -f "$f" ]; then
       echo "build-ts: $f is missing: run tools/build-ts.sh" >&2; bad=1
     elif [ "$(nsha "$f")" != "$(nsha "$tmp/out/$f")" ]; then
-      echo "build-ts: $f is NOT what ts/ compiles to: edit ts/, then run tools/build-ts.sh" >&2; bad=1
+      echo "build-ts: $f is NOT what $(source_of "$f") compiles to: edit $(source_of "$f"), then run tools/build-ts.sh" >&2; bad=1
     elif [ "$GIT" = 1 ] && ! tracked "$f"; then
-      echo "build-ts: $f is what ts/ compiles to but is not tracked by git: git add it" >&2; bad=1
+      echo "build-ts: $f is what $(source_of "$f") compiles to but is not tracked by git: git add it" >&2; bad=1
     else
-      echo "build-ts: $f matches ts/"
+      echo "build-ts: $f matches $(source_of "$f")"
     fi
   done
   # Compiled JavaScript with no source: app.js's folder and core/ hold only what ts/ compiles to.
@@ -120,6 +146,14 @@ if [ "$MODE" = build ]; then
     mkdir -p "$tmp/head"
     git archive HEAD tsconfig.json ts | tar -x -C "$tmp/head"
     "${TSC[@]}" -p "$tmp/head/tsconfig.json" --outDir "$tmp/head-out" >/dev/null 2>&1 || true
+    # The bridge as the committed android-bridge.ts compiles (absent before it was TypeScript).
+    if git cat-file -e "HEAD:${BRIDGE%.js}.ts" 2>/dev/null && git cat-file -e HEAD:android/web-overlay/tsconfig.json 2>/dev/null; then
+      git archive HEAD "${BRIDGE%.js}.ts" android/web-overlay/tsconfig.json | tar -x -C "$tmp/head"
+      if "${TSC[@]}" -p "$tmp/head/android/web-overlay/tsconfig.json" --noEmit false --outDir "$tmp/head-bridge" >/dev/null 2>&1; then
+        mkdir -p "$tmp/head-out/$(dirname "$BRIDGE")"
+        cp "$tmp/head-bridge/$BRIDGE" "$tmp/head-out/$BRIDGE"
+      fi
+    fi
   fi
   hand=()
   for f in "${OUTPUTS[@]}"; do
@@ -132,9 +166,9 @@ if [ "$MODE" = build ]; then
   done
   if [ "${#hand[@]}" -gt 0 ]; then
     for f in "${hand[@]}"; do
-      echo "build-ts: $f holds changes that no ts/ source produced (edited by hand?)" >&2
+      echo "build-ts: $f holds changes that no TypeScript source produced (edited by hand?)" >&2
     done
-    die "nothing was written. Port the change into ts/ (git diff and git log -p show it), then build again; or run tools/build-ts.sh --force to overwrite it."
+    die "nothing was written. Port the change into its TypeScript source (git diff and git log -p show it), then build again; or run tools/build-ts.sh --force to overwrite it."
   fi
 fi
 

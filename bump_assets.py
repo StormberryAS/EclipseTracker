@@ -39,10 +39,11 @@ What it does NOT touch, deliberately:
     it changes, and the font bytes are immutable anyway
   * tests/: test files are not published and import the engine without stamps
   * ts/ and tools/: the TypeScript sources and the build tooling, never published
-  * vendor/ and third_party/: third-party files stay byte for byte as published upstream, or as
-    their recorded conversion (tools/vendor.mjs checks them against tools/upstream.lock.json); a
-    vendored package sits in a folder named with its version (vendor/zxing-wasm-3.1.4/), or with
-    the commit it is pinned to (vendor/qrcodegen-8329a71/), so a new version is a new address
+  * vendor/ and third_party/: third-party files stay byte for byte as published upstream. In
+    CheckLink, where this rule comes from, tools/vendor.mjs checks them against
+    tools/upstream.lock.json and a vendored package sits in a folder named with its version or
+    pinned commit, so a new version is a new address. EclipseTracker vendors no package (none of
+    these folders exists here); the rule stays so that one added later is never stamped
 
 Usage:  python3 bump_assets.py [--check]
         --check exits 1 if any page or module is stale, without writing. For a git hook.

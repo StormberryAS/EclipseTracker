@@ -6,16 +6,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { MAX_ALARMS, planAlarms, ringing } from '../core/alarms.js';
-import { ECLIPSES } from '../core/data.js';
-import { icsFileName, isIcsFileName } from '../core/format.js';
-import { EVENT_MINUTES, PRODID, buildIcs, escapeText, foldLine, triggerDuration, utcStamp } from '../core/ics.js';
-import { goldenIcs } from './golden-case.mjs';
+import { MAX_ALARMS, planAlarms, ringing } from '#core/alarms.js';
+import { ECLIPSES } from '#core/data.js';
+import { icsFileName, isIcsFileName } from '#core/format.js';
+import { EVENT_MINUTES, PRODID, buildIcs, escapeText, foldLine, triggerDuration, utcStamp } from '#core/ics.js';
+import { goldenIcs } from './golden-case.ts';
+import type { AlarmSpec, Eclipse } from '#core/types.js';
+import { defined } from './helpers.ts';
 
-const octets = (s) => Buffer.byteLength(s, 'utf8');
-const unfold = (ics) => ics.replace(/\r\n[ \t]/g, '');
-const lines = (ics) => unfold(ics).split('\r\n').slice(0, -1);
-const byId = (id) => ECLIPSES.find((e) => e.id === id);
+const octets = (s: string): number => Buffer.byteLength(s, 'utf8');
+const unfold = (ics: string): string => ics.replace(/\r\n[ \t]/g, '');
+const lines = (ics: string): string[] => unfold(ics).split('\r\n').slice(0, -1);
+const byId = (id: string): Eclipse => defined(ECLIPSES.find((e) => e.id === id), id);
 
 test('the golden calendar file, byte for byte', () => {
   const want = readFileSync(new URL('./goldens/eclipse-2027-02-06-solar.ics', import.meta.url), 'utf8');
@@ -52,13 +54,14 @@ test('one VALARM per alarm, every trigger a duration from the start of the event
 });
 
 test('durations: days and hours and minutes, never weeks; positive after greatest eclipse; zero', () => {
-  for (const [minutes, want] of [[-15, '-PT15M'], [-30, '-PT30M'], [-60, '-PT1H'], [-120, '-PT2H'], [-300, '-PT5H'], [-1740, '-P1DT5H'], [-10590, '-P7DT8H30M'],
-    [-1440, '-P1D'], [-10080, '-P7D'], [707, 'PT11H47M'], [1, 'PT1M'], [1439, 'PT23H59M'], [0, 'PT0S']]) assert.equal(triggerDuration(minutes), want, String(minutes));
+  const cases: Array<[number, string]> = [[-15, '-PT15M'], [-30, '-PT30M'], [-60, '-PT1H'], [-120, '-PT2H'], [-300, '-PT5H'], [-1740, '-P1DT5H'], [-10590, '-P7DT8H30M'],
+    [-1440, '-P1D'], [-10080, '-P7D'], [707, 'PT11H47M'], [1, 'PT1M'], [1439, 'PT23H59M'], [0, 'PT0S']];
+  for (const [minutes, want] of cases) assert.equal(triggerDuration(minutes), want, String(minutes));
   assert.throws(() => triggerDuration(0.5), RangeError);
 });
 
 /** The instant a duration trigger names, from the start of the event. */
-function triggerInstant(start, trigger) {
+function triggerInstant(start: number, trigger: string): number {
   const m = /^TRIGGER:(-?)P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(trigger);
   assert.ok(m, trigger);
   const minutes = (Number(m[2] || 0) * 1440) + (Number(m[3] || 0) * 60) + Number(m[4] || 0) + Number(m[5] || 0) / 60;
@@ -67,7 +70,7 @@ function triggerInstant(start, trigger) {
 
 test('no absolute trigger is ever written, and every trigger rings at exactly the planned instant (data review D-1)', () => {
   const now = Date.parse('2026-10-16T00:00:00Z');
-  const sets = [
+  const sets: AlarmSpec[][] = [
     [{ kind: 'day', daysBefore: 0, time: '12:00' }, { kind: 'day', daysBefore: 1, time: '00:00' }, { kind: 'day', daysBefore: 7, time: '23:59' }, { kind: 'before', minutes: 120 }],
     [{ kind: 'day', daysBefore: 0, time: '23:59' }, { kind: 'day', daysBefore: 2, time: '02:30' }, { kind: 'day', daysBefore: 3, time: '07:15' }, { kind: 'before', minutes: 15 }],
   ];
@@ -79,7 +82,7 @@ test('no absolute trigger is ever written, and every trigger rings at exactly th
         const ics = buildIcs({ eclipse: e, alarms, uid: 'e'.repeat(32), dtstamp: now });
         assert.doesNotMatch(ics, /VALUE=DATE-TIME|TRIGGER;/, `${e.id} ${zone}`);
         const l = lines(ics);
-        const start = Date.parse(utcStampToIso(l.find((x) => x.startsWith('DTSTART:')).slice(8)));
+        const start = Date.parse(utcStampToIso(defined(l.find((x) => x.startsWith('DTSTART:')), 'DTSTART').slice(8)));
         const got = l.filter((x) => x.startsWith('TRIGGER')).map((t) => triggerInstant(start, t));
         assert.deepEqual(got, ringing(alarms).map((a) => a.fireAt), `${e.id} ${zone}`);
         n += got.length;
@@ -89,12 +92,12 @@ test('no absolute trigger is ever written, and every trigger rings at exactly th
   assert.ok(n > 10000);
 });
 
-const utcStampToIso = (s) => s.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, '$1-$2-$3T$4:$5:$6Z');
+const utcStampToIso = (s: string): string => s.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, '$1-$2-$3T$4:$5:$6Z');
 
 test('summer time: an alarm at 12:00 in Oslo is 10:00 UTC; Sydney uses its own offset', () => {
   const e = byId('2033-03-30-solar');
   const now = Date.parse('2026-10-16T00:00:00Z');
-  const specs = [{ kind: 'day', daysBefore: 0, time: '12:00' }, { kind: 'day', daysBefore: 7, time: '12:00' }];
+  const specs: AlarmSpec[] = [{ kind: 'day', daysBefore: 0, time: '12:00' }, { kind: 'day', daysBefore: 7, time: '12:00' }];
   const oslo = lines(buildIcs({ eclipse: e, alarms: planAlarms(e, specs, 'Europe/Oslo', now), uid: 'a'.repeat(32), dtstamp: now }));
   // The event starts at 18:01 UTC on 30 March 2033. 12:00 a week before is 11:00 UTC (winter time),
   // 12:00 on the day 10:00 UTC (summer time): 7 days 7 hours 1 minute and 8 hours 1 minute before.
@@ -137,7 +140,7 @@ test('folding: never inside a character, continuation lines count their space', 
   assert.equal(long.replace(/\r\n /g, ''), 'ô'.repeat(100));
   assert.equal(foldLine('short'), 'short');
   // Côte d'Ivoire is in a real path, and its ô is two octets.
-  const e = ECLIPSES.find((x) => x.path.includes('Côte'));
+  const e = defined(ECLIPSES.find((x) => x.path.includes('Côte')), 'an eclipse whose path names Côte d\'Ivoire');
   const ics = buildIcs({ eclipse: e, alarms: [], uid: 'd'.repeat(32), dtstamp: 0 });
   assert.ok(unfold(ics).includes('Côte d\'Ivoire'));
   assert.ok(!ics.includes('�'));
@@ -150,8 +153,8 @@ test('TEXT escaping: backslash first, then semicolon, comma and line breaks', ()
 });
 
 test('at most 8 alarms in a file (data review D-7)', () => {
-  const e = ECLIPSES[0];
-  const nine = Array.from({ length: 9 }, (_, i) => ({ kind: 'day', daysBefore: 0, time: `0${i}:00` }));
+  const e = defined(ECLIPSES[0], 'the first eclipse');
+  const nine = Array.from({ length: 9 }, (_, i): AlarmSpec => ({ kind: 'day', daysBefore: 0, time: `0${i}:00` }));
   const planned = [...planAlarms(e, nine.slice(0, 8), 'UTC', 0), ...planAlarms(e, nine.slice(8), 'UTC', 0)];
   assert.throws(() => buildIcs({ eclipse: e, alarms: planned, uid: 'f'.repeat(32), dtstamp: 0 }), RangeError);
   const ics = buildIcs({ eclipse: e, alarms: planned.slice(0, MAX_ALARMS), uid: 'f'.repeat(32), dtstamp: 0 });
@@ -166,6 +169,6 @@ test('file names: only the strict pattern (stage B checks a name from the page w
 });
 
 test('the uid must be random hex from the caller', () => {
-  const e = ECLIPSES[0];
+  const e = defined(ECLIPSES[0], 'the first eclipse');
   for (const bad of ['', 'xyz', 'ABCDEF0123456789', '0123456789abcde', 'g'.repeat(32)]) assert.throws(() => buildIcs({ eclipse: e, alarms: [], uid: bad, dtstamp: 0 }), RangeError);
 });

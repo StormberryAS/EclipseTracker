@@ -5,6 +5,9 @@
 # app.js and core/*.js are compiled from ts/ by tools/build-ts.sh; edit the TypeScript.
 /app.js linguist-generated=true
 /core/*.js linguist-generated=true
+# android/web-overlay/android-bridge.js, the script the Android app injects into the page, is compiled
+# from android-bridge.ts beside it by tools/build-ts.sh (17 October 2026); edit the TypeScript.
+/android/web-overlay/android-bridge.js linguist-generated=true
 # ts/core/data.ts and data/eclipses.json are written by tools/build-eclipse-data.py from the
 # archived NASA pages in tools/nasa/, which are vendored and kept byte for byte as fetched.
 /ts/core/data.ts linguist-generated=true

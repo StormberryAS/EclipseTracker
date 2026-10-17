@@ -11,7 +11,7 @@ package no.stormberry.eclipsetracker.web
  * directive for directive, plus frame-ancestors 'none' and upgrade-insecure-requests, the two
  * directives only a header can carry. The browser enforces the header and the meta tag together,
  * so the page stays exactly as strict as on the website (connect-src 'none', no worker).
- * tests/android-app.test.mjs checks that this string is the page's meta policy plus those two
+ * tests/android-app.test.ts checks that this string is the page's meta policy plus those two
  * directives and nothing else. Referrer-Policy: no-referrer, as the page's own meta tag says.
  *
  * Fix C (17 October 2026, M-1): the disclaimer, the same file as every Labs page's disclaimer,

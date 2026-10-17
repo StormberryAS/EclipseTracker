@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 // Browser smoke test of EclipseTracker in APP MODE: the page as the Android app loads it, in
-// headless Chromium over the DevTools protocol (tests/cdp.mjs), modelled on GDPRLetterBuilder's
+// headless Chromium over the DevTools protocol (tests/cdp.ts), modelled on GDPRLetterBuilder's
 // tests/app-mode-smoke.mjs (its review A3-3).
 //
-//   node tests/app-mode-smoke.mjs [--chromium /usr/bin/chromium] [--shots DIR]
+//   node tests/app-mode-smoke.ts [--chromium /usr/bin/chromium] [--shots DIR]
 //
 // What it serves is what the APK holds: index.html with the one line the build injects
 // (<script src="android-bridge.js"></script> before the first script, as WebAssets.inject does in
-// android/app/build.gradle.kts), android/web-overlay/android-bridge.js beside it, and every response
+// android/app/build.gradle.kts), android/web-overlay/android-bridge.js beside it (compiled from
+// android-bridge.ts by tools/build-ts.sh: what the APK bundles), and every response
 // with the headers the app's asset handler sends (ResponseHeaders.kt). The app's side of the
 // window.ETBridge channel is a stand-in (STUB below), injected before the page loads as the WebView
 // injects the real one; it answers as MainActivity does (spec 9.6), and each check chooses how.
 // The real android-bridge.js runs on top of it, so this tests the bridge script and the page
+// (the words the checks expect are read from the TypeScript source, so the compiled script is
+// held to its source too)
 // together, on a frozen clock (16 October 2026, 10:30 UTC), in Europe/Oslo:
 //   * the bridge says hello; no request leaves the page, none after load, no policy violation,
 //     no error, no storage, no cookie, no download;
@@ -40,7 +43,7 @@
 //   * the website, and the APK's files on a WebView too old for the channel, show none of it.
 // Nothing leaves the machine: the browser can reach only this server.
 //
-// The file name does not end in .test.mjs, so `node --test tests/` does not run it.
+// The file name does not end in .test.ts, so `node --test tests/*.test.ts` does not run it.
 
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
@@ -48,15 +51,18 @@ import { tmpdir } from 'node:os';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-import { launchChromium, openPage, selectsCut, sleep } from './cdp.mjs';
-import { planAlarms } from '../core/alarms.js';
-import { eclipseById } from '../core/eclipses.js';
-import { buildIcs } from '../core/ics.js';
+import { launchChromium, openPage, selectsCut, sleep } from './cdp.ts';
+import type { FromBrowser, Page } from './cdp.ts';
+import { planAlarms } from '#core/alarms.js';
+import { eclipseById } from '#core/eclipses.js';
+import { buildIcs } from '#core/ics.js';
+import type { AlarmSpec } from '#core/types.js';
+import { defined, group } from './helpers.ts';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const arg = (name, dflt) => {
+const arg = <T extends string | null>(name: string, dflt: T): string | T => {
   const i = process.argv.indexOf(name);
-  return i > 0 ? process.argv[i + 1] : dflt;
+  return i > 0 ? (process.argv[i + 1] ?? dflt) : dflt;
 };
 const CHROMIUM = arg('--chromium', '/usr/bin/chromium');
 const SHOTS = arg('--shots', null);
@@ -65,38 +71,42 @@ const J = JSON.stringify;
 
 // The app's headers (ResponseHeaders.kt, ALL).
 const KT = join(ROOT, 'android/app/src/main/kotlin/no/stormberry/eclipsetracker/web');
-const APP_CSP = readFileSync(join(KT, 'ResponseHeaders.kt'), 'utf8')
-  .match(/CONTENT_SECURITY_POLICY =\s*([\s\S]*?)\n\n/)[1]
-  .match(/"([^"]*)"/g).map((s) => s.slice(1, -1)).join('');
+const APP_CSP = defined(group(/CONTENT_SECURITY_POLICY =\s*([\s\S]*?)\n\n/, readFileSync(join(KT, 'ResponseHeaders.kt'), 'utf8'))
+  .match(/"([^"]*)"/g), 'the policy strings').map((s) => s.slice(1, -1)).join('');
 const HEADERS = { 'Content-Security-Policy': APP_CSP, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' };
 // Fix C (M-1): the disclaimer's response allows its one style element by hash (ResponseHeaders.DISCLAIMER),
 // made here from the Kotlin constant exactly as ResponseHeaders.kt makes it.
 const KT_HEADERS = readFileSync(join(KT, 'ResponseHeaders.kt'), 'utf8');
-const DISCLAIMER_HASH = KT_HEADERS.match(/DISCLAIMER_STYLE_HASH = "([^"]+)"/)[1];
+const DISCLAIMER_HASH = group(/DISCLAIMER_STYLE_HASH = "([^"]+)"/, KT_HEADERS);
 const DISCLAIMER_CSP = APP_CSP.replace("style-src 'self';", `style-src 'self' '${DISCLAIMER_HASH}';`);
 const DISCLAIMER_HEADERS = { ...HEADERS, 'Content-Security-Policy': DISCLAIMER_CSP };
 // Fix C (S-2): the app enlarges the page's text as a browser's font size setting does, with a larger
 // default font size (TextScale.kt); the two base sizes are read from there.
 const TEXT_SCALE_KT = readFileSync(join(KT, 'TextScale.kt'), 'utf8');
-const BASE_FONT_PX = Number(TEXT_SCALE_KT.match(/const val BASE_FONT_PX = (\d+)/)[1]);
-const BASE_FIXED_FONT_PX = Number(TEXT_SCALE_KT.match(/const val BASE_FIXED_FONT_PX = (\d+)/)[1]);
-const appFontSizes = (scale) => ({ standard: Math.round(BASE_FONT_PX * scale), fixed: Math.round(BASE_FIXED_FONT_PX * scale) });
+const BASE_FONT_PX = Number(group(/const val BASE_FONT_PX = (\d+)/, TEXT_SCALE_KT));
+const BASE_FIXED_FONT_PX = Number(group(/const val BASE_FIXED_FONT_PX = (\d+)/, TEXT_SCALE_KT));
+const appFontSizes = (scale: number): { standard: number; fixed: number } => ({ standard: Math.round(BASE_FONT_PX * scale), fixed: Math.round(BASE_FIXED_FONT_PX * scale) });
 const BRIDGE_TAG = '<script src="android-bridge.js"></script>';
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
+const TYPES: Readonly<Record<string, string>> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
+/** What the app serves: the compiled bridge script. */
 const BRIDGE_SRC = readFileSync(join(ROOT, 'android/web-overlay/android-bridge.js'), 'utf8');
+/** Its TypeScript source, where the words are written. */
+const BRIDGE_TS = readFileSync(join(ROOT, 'android/web-overlay/android-bridge.ts'), 'utf8');
 
-// The bridge's own words, read from it so a change there shows here.
-const W = (name) => {
-  const m = BRIDGE_SRC.match(new RegExp(`\\n    ${name}: ('([^']*)'|"([^"]*)"),`));
-  if (!m) throw new Error(`no ${name} in android-bridge.js`);
-  return m[2] ?? m[3];
+// The bridge's own words, read from its source so a change there shows here.
+const W = (name: string): string => {
+  const m = BRIDGE_TS.match(new RegExp(`\\n    ${name}: ('([^']*)'|"([^"]*)"),`));
+  const word = m ? (m[2] ?? m[3]) : undefined;
+  if (word === undefined) throw new Error(`no ${name} in android-bridge.ts`);
+  return word;
 };
-const T = Object.fromEntries(['SET', 'ADD', 'TRAVEL', 'KEEPS', 'SET_ONE', 'SET_MANY', 'SET_NONE', 'SET_FAILED', 'CAL_OPENED', 'CAL_SHARED', 'CAL_FAILED', 'SAVE_FAILED', 'HEADING', 'INTRO', 'EMPTY', 'CHANGE', 'DELETE', 'DELETED'].map((k) => [k, W(k)]));
+const WORDS = ['SET', 'ADD', 'TRAVEL', 'KEEPS', 'SET_ONE', 'SET_MANY', 'SET_NONE', 'SET_FAILED', 'CAL_OPENED', 'CAL_SHARED', 'CAL_FAILED', 'SAVE_FAILED', 'HEADING', 'INTRO', 'EMPTY', 'CHANGE', 'DELETE', 'DELETED'] as const;
+const T = Object.fromEntries(WORDS.map((k) => [k, W(k)])) as Record<typeof WORDS[number], string>;
 const A4 = "Ringing alarms follow your phone's time zone: if you travel, a 12.00 alarm rings at 12.00 where you are. Alarms before greatest eclipse always follow the eclipse.";
 const WEB_TRAVEL = 'If you travel, those alarms still ring at the same moment, which may be a different hour where you are.';
 
 // WebAssets.inject: the bridge tag on its own line, before the first <script, same indent.
-function inject(source) {
+function inject(source: string): string {
   const first = source.indexOf('<script');
   const lineStart = source.lastIndexOf('\n', first) + 1;
   const indent = source.slice(lineStart, first);
@@ -107,15 +117,15 @@ function inject(source) {
 // carousel's /switcher-icons/...) is the website's. /nohash/... is the APK's copy with the policy of
 // every other response on the disclaimer too (the control for fix C, M-1: what stage B sent).
 const server = createServer((req, res) => {
-  const url = new URL(req.url, 'http://x');
+  const url = new URL(req.url ?? '/', 'http://x');
   let path = decodeURIComponent(url.pathname);
   const nohash = path.startsWith('/nohash/');
   if (nohash) path = path.replace(/^\/nohash\//, '/app/');
   const app = path.startsWith('/app/');
   if (!app && !path.startsWith('/web/')) path = `/web${path}`;
   const rel = path.replace(/^\/(app|web)\//, '/');
-  let body = null;
-  let type = null;
+  let body: Buffer | null = null;
+  let type: string | undefined;
   if (app && rel === '/android-bridge.js') {
     body = Buffer.from(BRIDGE_SRC);
     type = TYPES['.js'];
@@ -134,11 +144,13 @@ const server = createServer((req, res) => {
     return;
   }
   const headers = app && !nohash && rel === '/disclaimer.html' ? DISCLAIMER_HEADERS : HEADERS;
-  res.writeHead(200, { ...headers, 'Content-Type': type });
+  res.writeHead(200, { ...headers, 'Content-Type': type ?? 'application/octet-stream' });
   res.end(body);
 });
-await new Promise((r, j) => { server.once('error', j); server.listen(0, '127.0.0.1', r); });
-const ORIGIN = `http://127.0.0.1:${server.address().port}`;
+await new Promise<void>((r, j) => { server.once('error', j); server.listen(0, '127.0.0.1', r); });
+const address = server.address();
+if (!address || typeof address === 'string') throw new Error('the test server has no port');
+const ORIGIN = `http://127.0.0.1:${address.port}`;
 
 // The app's side of ETBridge, as MainActivity answers (spec 9.6). window.__et: posted (every
 // message, in order), records (what the app stores), armed (what it reports armed: [{ id, fireAt }]),
@@ -170,42 +182,42 @@ const STUB = `(() => {
 })();`;
 
 const NOW = Date.parse('2026-10-16T10:30:00Z');
-const clockAt = (t) => `(() => { const real = Date.now.bind(Date); const off = ${t} - real(); Date.now = () => real() + off; })();`;
+const clockAt = (t: number): string => `(() => { const real = Date.now.bind(Date); const off = ${t} - real(); Date.now = () => real() + off; })();`;
 const work = mkdtempSync(join(tmpdir(), 'eclipse-app-mode-'));
 const downloads = join(work, 'downloads');
 mkdirSync(downloads, { recursive: true });
 const browser = await launchChromium({ chromium: CHROMIUM, out: join(work, 'chromium') });
-const open = (path, { stub = true, width = 1280, height = 900, timezone = 'Europe/Oslo', now = NOW } = {}) =>
+const open = (path: string, { stub = true, width = 1280, height = 900, timezone = 'Europe/Oslo', now = NOW }: { stub?: boolean; width?: number; height?: number; timezone?: string; now?: number } = {}): Promise<Page> =>
   openPage(browser, `${ORIGIN}${path}`, { width, height, timezone, base: ORIGIN, downloads, init: stub ? `${clockAt(now)}\n${STUB}` : clockAt(now) });
 
 let passed = 0;
-async function cleanup() {
+async function cleanup(): Promise<void> {
   await browser.close().catch(() => {});
   server.close();
   rmSync(work, { recursive: true, force: true });
 }
-async function check(name, fn) {
+async function check(name: string, fn: () => Promise<void>): Promise<void> {
   try {
     await fn();
     passed += 1;
     console.log(`ok ${passed} ${name}`);
   } catch (err) {
-    console.log(`not ok ${name}\n  ${String(err && err.stack || err).split('\n').join('\n  ')}`);
+    console.log(`not ok ${name}\n  ${String((err as Error | null)?.stack || err).split('\n').join('\n  ')}`);
     await cleanup();
     process.exit(1);
   }
 }
 
-const houseStyle = (text, where) => {
+const houseStyle = (text: string, where: string): void => {
   assert.doesNotMatch(text, /[–—]/, `${where}: no en or em dash`);
   assert.doesNotMatch(text, /--/, `${where}: no double hyphen`);
   assert.doesNotMatch(text, /!/, `${where}: no exclamation mark`);
 };
-const posted = (p, type) => p.ev(`window.__et.posted.filter((m) => m.type === ${J(type)})`);
-const status = (p) => p.ev("document.getElementById('planner-status').textContent");
-const setSelect = (p, selector, value) => p.ev(`(() => { const s = ${selector}; s.focus(); s.value = ${J(value)}; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
-const setTime = (p, selector, value) => p.ev(`(() => { const t = ${selector}; t.focus(); t.value = ${J(value)}; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
-const waitStatus = (p, text) => p.waitFor(`document.getElementById('planner-status').textContent === ${J(text)}`, 4000);
+const posted = (p: Page, type: string): Promise<FromBrowser[]> => p.ev(`window.__et.posted.filter((m) => m.type === ${J(type)})`);
+const status = (p: Page): Promise<string> => p.ev("document.getElementById('planner-status').textContent");
+const setSelect = (p: Page, selector: string, value: string): Promise<void> => p.ev(`(() => { const s = ${selector}; s.focus(); s.value = ${J(value)}; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+const setTime = (p: Page, selector: string, value: string): Promise<void> => p.ev(`(() => { const t = ${selector}; t.focus(); t.value = ${J(value)}; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+const waitStatus = (p: Page, text: string): Promise<boolean> => p.waitFor(`document.getElementById('planner-status').textContent === ${J(text)}`, 4000);
 const RECORD_ID = /^[0-9a-f]{32}$/;
 
 const p = await open('/app/');
@@ -253,7 +265,7 @@ await check("the planner gains Set ringing alarms and Add to calendar, and shows
   assert.ok(note.startsWith('Open the saved file with your calendar app'), 'the rest of the note is the approved text');
 });
 
-let firstId;
+let firstId: string | undefined;
 await check('Set ringing alarms stores the default alarm and says so; the overview shows it', async () => {
   await p.click('#app-set');
   await waitStatus(p, T.SET_ONE);
@@ -296,7 +308,7 @@ await check('the planner opens with the stored alarms; a changed row keeps its i
   await p.click('#app-set');
   await p.waitFor(`window.__et.posted.filter((m) => m.type === 'alarms.set').length === ${(await posted(p, 'alarms.set')).length + 1}`);
   const again = (await posted(p, 'alarms.set')).at(-1);
-  assert.deepEqual(again.records.map((r) => r.id), m.records.map((r) => r.id));
+  assert.deepEqual(again.records.map((r: FromBrowser) => r.id), m.records.map((r: FromBrowser) => r.id));
 });
 
 await check('only the alarms the file would hold are stored: no repeated alarm; an empty time sends nothing', async () => {
@@ -334,10 +346,10 @@ await check('Add to calendar hands over the very file Save makes, and the line f
   const m = (await posted(p, 'calendar.add')).at(-1);
   assert.equal((await posted(p, 'calendar.add')).length, count + 1);
   assert.equal(m.fileName, 'eclipse-2027-02-06-solar.ics');
-  const e = eclipseById('2027-02-06-solar');
-  const specs = [{ kind: 'day', daysBefore: 0, time: '08:30' }, { kind: 'before', minutes: 30 }];
-  const uid = /UID:([0-9a-f]+)@/.exec(m.ics)[1];
-  const stamp = /DTSTAMP:(\d{8}T\d{6}Z)/.exec(m.ics)[1];
+  const e = defined(eclipseById('2027-02-06-solar'), 'the 2027-02-06 solar eclipse');
+  const specs: AlarmSpec[] = [{ kind: 'day', daysBefore: 0, time: '08:30' }, { kind: 'before', minutes: 30 }];
+  const uid = group(/UID:([0-9a-f]+)@/, m.ics);
+  const stamp = group(/DTSTAMP:(\d{8}T\d{6}Z)/, m.ics);
   const dtstamp = Date.UTC(+stamp.slice(0, 4), +stamp.slice(4, 6) - 1, +stamp.slice(6, 8), +stamp.slice(9, 11), +stamp.slice(11, 13), +stamp.slice(13, 15));
   const want = buildIcs({ eclipse: e, alarms: planAlarms(e, specs, 'Europe/Oslo', NOW), uid, dtstamp });
   assert.equal(m.ics, want, 'byte for byte what core/ics.js makes');
@@ -411,7 +423,7 @@ await check('the overview: alarms by eclipse in time order, the armed time, Chan
   await p.waitFor(`document.getElementById('app-alarms-status').textContent === ${J(T.DELETED)}`, 4000);
   const m = (await posted(p, 'alarms.set')).at(-1);
   assert.equal(m.eclipseId, '2027-02-06-solar');
-  assert.deepEqual(m.records.map((r) => r.id), [solar[0]]);
+  assert.deepEqual(m.records.map((r: FromBrowser) => r.id), [solar[0]]);
   assert.equal(await p.ev("document.querySelectorAll('#app-alarms-list li').length"), 2);
   assert.ok(await p.ev("document.getElementById('app-alarms').contains(document.activeElement)"), 'focus stays in the overview');
   assert.equal(await p.ev("document.getElementById('app-alarms-status').getAttribute('aria-live')"), 'polite');
@@ -496,7 +508,7 @@ await check('the whole page in app mode keeps the house style, with no error, vi
   await p.waitFor("document.getElementById('planner').open");
   houseStyle(await p.ev('document.body.innerText'), 'app mode page');
   for (const [k, v] of Object.entries(T)) houseStyle(v, `bridge text ${k}`);
-  houseStyle(BRIDGE_SRC.match(/PROBLEMS: \{([\s\S]*?)\n {4}\}/)[1].replace(/'[a-z-]+':/g, ''), 'problem texts');
+  houseStyle(group(/PROBLEMS: \{([\s\S]*?)\n {4}\}/, BRIDGE_TS).replace(/'[a-z-]+':/g, ''), 'problem texts');
   if (SHOTS) await p.viewShot(join(SHOTS, 'app-planner-1280.png'));
   await p.key('Escape');
   if (SHOTS) await p.shot(join(SHOTS, 'app-page-1280.png'));
@@ -516,7 +528,7 @@ await p.close();
 // textZoom 100), at 1.3, 1.5 and 2.0, on a 320 px screen and a common one (412 px): the title whole,
 // no sideways scroll anywhere on the page, the overview and the planner inside the screen, every select
 // whole. The footer's app carousel scrolls sideways by design and is left out of the page-wide look.
-const overflowing = (w) => `(() => { const out = []; for (const n of document.querySelectorAll('body *')) {
+const overflowing = (w: number): string => `(() => { const out = []; for (const n of document.querySelectorAll('body *')) {
   if (n.closest('.app-switcher-track') || n.closest('dialog')) continue;
   const r = n.getBoundingClientRect(); if (!r.width || getComputedStyle(n).position === 'fixed') continue;
   if (r.right > ${w} + 0.5 || r.left < -0.5) out.push((n.id || n.className || n.tagName) + ' ' + Math.round(r.left) + '..' + Math.round(r.right)); }
@@ -558,9 +570,9 @@ for (const width of [320, 412]) {
 // Fix C (M-1): the disclaimer as the app serves it, its style element allowed by hash: readable in the
 // dark and in the light colour scheme, with no policy violation; and the control, served as stage B
 // served it (no hash), refused and unstyled, which is the fault the hash fixes.
-const contrast = (fg, bg) => {
-  const lum = (c) => { const [r, g, b] = c.match(/\d+(\.\d+)?/g).slice(0, 3).map(Number).map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
-  const [a, b] = [lum(fg), lum(bg)].sort((x, y) => y - x);
+const contrast = (fg: string, bg: string): number => {
+  const lum = (c: string): number => { const [r = 0, g = 0, b = 0] = defined(c.match(/\d+(\.\d+)?/g), `a colour in ${c}`).slice(0, 3).map(Number).map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const [a = 0, b = 0] = [lum(fg), lum(bg)].sort((x, y) => y - x);
   return (a + 0.05) / (b + 0.05);
 };
 const DISCLAIMER_LOOK = "(() => { const b = getComputedStyle(document.body); const h2 = getComputedStyle(document.querySelector('h2')); return { fg: b.color, bg: b.backgroundColor, h2: h2.color, maxWidth: getComputedStyle(document.querySelector('main')).maxWidth }; })()";
@@ -569,7 +581,7 @@ await check("the disclaimer in the app: its own colours in the dark and the ligh
     dark: { fg: 'rgb(215, 221, 229)', bg: 'rgb(13, 17, 23)', h2: 'rgb(216, 163, 64)' },
     light: { fg: 'rgb(29, 36, 44)', bg: 'rgb(251, 250, 247)', h2: 'rgb(138, 100, 18)' },
   };
-  for (const scheme of ['dark', 'light']) {
+  for (const scheme of ['dark', 'light'] as const) {
     const d = await open('/app/disclaimer.html', { stub: false, width: 412, height: 800 });
     await d.s('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] });
     await sleep(200);
@@ -615,7 +627,7 @@ await check('fix B, A-9: Change works for an alarm kept after greatest eclipse; 
   await m.waitFor(`document.getElementById('planner-status').textContent === ${J(T.SET_ONE)}`, 4000);
   const set = (await m.ev("window.__et.posted.filter((x) => x.type === 'alarms.set')")).at(-1);
   assert.equal(set.eclipseId, '2027-02-20-lunar');
-  assert.deepEqual(set.records.map((r) => [r.id, r.spec]), [[id, { kind: 'day', daysBefore: 0, time: '18:00' }]]);
+  assert.deepEqual(set.records.map((r: FromBrowser) => [r.id, r.spec]), [[id, { kind: 'day', daysBefore: 0, time: '18:00' }]]);
   // An alarm already passed is left out, as from the file; the eclipse's file is still refused.
   await m.ev("document.getElementById('add-alarm').click()");
   await setSelect(m, "document.querySelectorAll('.alarm-choice')[1]", 'before');
@@ -641,7 +653,7 @@ await check('fix B, A-9: Change works for an alarm kept after greatest eclipse; 
 });
 
 await check('the website, and the APK files on a WebView too old for the channel, show none of the app parts', async () => {
-  for (const [path, stub] of [['/web/', true], ['/app/', false]]) {
+  for (const [path, stub] of [['/web/', true], ['/app/', false]] as const) {
     const w = await open(path, { stub });
     assert.equal(await w.ev("typeof window.EclipseTrackerApp"), 'undefined');
     assert.equal(await w.ev("!!document.getElementById('app-alarms') || !!document.getElementById('app-set')"), false);

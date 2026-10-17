@@ -25,7 +25,8 @@ It binds to 127.0.0.1 on a free port (or --port) and prints one line when ready:
 
 With --tls it makes a throwaway self-signed certificate for eclipse.stormberry.as with
 openssl and serves HTTPS, so a browser can load the page under its real name and scheme
-(map the name to this port and trust the printed SPKI hash; tests/e2e.mjs does this).
+(map the name to this port and trust the printed SPKI hash). CheckLink's tests/e2e.mjs, where
+this comes from, does that; EclipseTracker's tests use plain HTTP.
 
 One JSON line per request goes to stderr, or to --log FILE. Only GET and HEAD are served.
 

@@ -1,0 +1,85 @@
+# Zapstore publishing manifest (https://zapstore.dev/docs/publish).
+#
+# `pubkey` is load-bearing, not decoration: on a first publish the Zapstore relay
+# fetches this file from the repository and whitelists the key it finds here, so
+# it must stay identical to the key `zsp` signs with (SIGN_WITH). It is the
+# Stormberry AS nostr identity, the same one behind nostr.json at stormberry.as.
+#
+# Publish a release with the config file, and only once the release workflow has
+# finished and the GitHub release exists (zsp takes whatever release is there):
+#   SIGN_WITH=<nsec|bunker://...> zsp publish zapstore.yaml
+# Not `zsp publish -r ...`: that reads the repository instead of this file and
+# drops the tags, the licence and the website.
+repository: https://github.com/StormberryAS/EclipseTracker
+pubkey: npub1zz9w77p2jkn95t0st9tcuea8zdn2vknf0ctrwyd4g46w3kswdccqesr0pa
+
+name: EclipseTracker
+summary: "Every solar and lunar eclipse to 2100, with alarms that ring, all offline"
+description: |
+  EclipseTracker lists every solar and lunar eclipse from now to the end of 2100, 337 of them from October 2026, taken from NASA's eclipse catalogue by Fred Espenak at NASA Goddard Space Flight Center. It counts down to the next one, and for each eclipse it shows the date and time of greatest eclipse in your own time zone, where it can be seen, the path of a total, annular or hybrid solar eclipse, the type and the magnitude. Filter the list by solar or lunar and by type.
+
+  Alarms for any eclipse in the list, up to eight for each:
+  - on the day, at a time you choose (12:00 unless you change it);
+  - 1, 2 or 3 days before, or a week before, at a time you choose;
+  - 15 minutes, 30 minutes, 1 hour or 2 hours before greatest eclipse.
+  The planner shows the exact date and time each alarm will ring before you keep it. Set ringing alarms and the phone rings them itself: the ring screen opens over the lock screen, with Snooze 9 minutes and Dismiss. Or press Add to calendar, which hands a calendar file (.ics) to your own calendar app. An overview lists every alarm you have set, each with a way to change or delete it.
+
+  Ringing alarms follow your phone's time zone: if you travel, a 12.00 alarm rings at 12.00 where you are. Alarms before greatest eclipse always follow the eclipse. An alarm whose time came while the phone was off is not rung late; a notice tells you it was missed.
+
+  No network and no tracking. There is no internet permission, so the app cannot send anything anywhere, and no location permission: your time zone comes from the phone's settings. No account, no adverts, no analytics. It stores only your alarms and what it needs to ring them, in its own storage, left out of backups, and removes each one once it has rung, or at the latest 48 hours after the eclipse.
+
+  It asks for nine permissions, all for the ringing alarms:
+  - USE_EXACT_ALARM (Android 13 and later) and SCHEDULE_EXACT_ALARM (Android 12 and 12L only): to ring at the minute you chose.
+  - POST_NOTIFICATIONS: to show the ringing alarm and the snoozed and missed notices. On Android 13 and later it asks you once, when you first set ringing alarms.
+  - USE_FULL_SCREEN_INTENT: to open the ring screen over the lock screen.
+  - FOREGROUND_SERVICE and FOREGROUND_SERVICE_SYSTEM_EXEMPTED: to keep an alarm ringing until you stop it, for up to 10 minutes.
+  - WAKE_LOCK: to keep the phone awake while an alarm starts.
+  - VIBRATE: to vibrate while it rings.
+  - RECEIVE_BOOT_COMPLETED: to set your alarms again after the phone restarts.
+  The list, the countdown and the calendar file need none of them. Check for yourself before installing:
+
+      aapt dump permissions eclipsetracker-v2.0.0.apk
+
+  The app runs the same page as eclipse.stormberry.as from inside the APK, offline. The build checks that every bundled file is byte for byte the one in the source repository, apart from one added line for the bridge to Android. The alarm times on the phone are worked out by a Kotlin port of the website's planner, tested against the same test cases.
+
+  The times come from NASA's catalogue, rounded to the minute. They depend on NASA's estimate of how the Earth's rotation slows, so a time may be a minute out even in the next few years, and a few minutes by 2100. Check anything that matters against an authoritative source.
+
+  This is a functioning prototype from Stormberry AS, MIT licensed, and 2.0.0 is its first Android release. In English only. The full disclaimer opens from the app's footer.
+
+tags:
+  - astronomy
+  - eclipse
+  - alarm
+  - offline
+  - privacy
+
+license: MIT
+website: https://eclipse.stormberry.as
+
+# The release text Zapstore shows for this version. Without this line zsp takes the
+# GitHub release body, which the workflow leaves to GitHub's generated notes. Point it
+# at the changelog of the versionCode being released, and change it at every release.
+release_notes: ./fastlane/metadata/android/en-US/changelogs/20000.txt
+
+# The APK ships no raster icon (the launcher icon is an adaptive-icon XML built from
+# vectors), and a store front-end without a bitmap shows an empty tile. So the icon is
+# supplied here: the launcher icon's own drawing (favicon.svg's first frame on #030305),
+# cropped as a launcher shows it, at 512x512.
+icon: ./fastlane/metadata/android/en-US/images/icon.png
+
+# Phone screenshots of the 2.0.0 release APK (the exact predicted file) on an Android 16 emulator,
+# 1080x2400: the next eclipse, the list, the alarm planner and a ringing alarm over the lock
+# screen. zsp uploads these to Blossom and references them from the app event.
+images:
+  - ./fastlane/metadata/android/en-US/images/phoneScreenshots/01-next-eclipse.png
+  - ./fastlane/metadata/android/en-US/images/phoneScreenshots/02-eclipse-list.png
+  - ./fastlane/metadata/android/en-US/images/phoneScreenshots/03-alarm-planner.png
+  - ./fastlane/metadata/android/en-US/images/phoneScreenshots/04-ringing-alarm.png
+
+# No release_source: zsp pulls the APK straight from the GitHub release, so the asset
+# URL in the nostr event points at the same signed binary the release page serves and
+# the attestation covers. The release workflow uploads eclipsetracker-v<version>.apk and
+# eclipsetracker-v<version>.apk.sha256 (the tag android-v2.0.0 gives
+# eclipsetracker-v2.0.0.apk). The pattern matches the APK and never the .sha256 file.
+# Keep it in step with .github/workflows/android-release.yml.
+match: "eclipsetracker-.*\\.apk$"

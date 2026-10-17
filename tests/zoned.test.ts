@@ -4,11 +4,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { addDays, deviceZone, isKnownZone, isWallTime, localDateTime, offsetMinutes, wallTimeToInstant, weekday } from '../core/zoned.js';
-import { countdownParts, countdownWords, dateWords, longDate, offsetWords, shortDate } from '../core/format.js';
+import { addDays, deviceZone, isKnownZone, isWallTime, localDateTime, offsetMinutes, wallTimeToInstant, weekday } from '#core/zoned.js';
+import { countdownParts, countdownWords, dateWords, longDate, offsetWords, shortDate } from '#core/format.js';
 
-const at = (s) => Date.parse(s);
-const iso = (ms) => new Date(ms).toISOString().replace('.000Z', 'Z');
+const at = (s: string): number => Date.parse(s);
+const iso = (ms: number): string => new Date(ms).toISOString().replace('.000Z', 'Z');
 
 test('offsets in Oslo, Sydney, Kolkata and UTC', () => {
   assert.equal(offsetMinutes('Europe/Oslo', at('2027-01-15T12:00:00Z')), 60);

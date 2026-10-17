@@ -1,7 +1,7 @@
 // The browser smoke test (spec section 12): the page as production serves it (tests/serve.py, with
 // the zone's Content-Security-Policy and the _config.yml exclusions), in headless Chromium.
 //
-//   node tests/smoke.mjs [--chromium /usr/bin/chromium] [--shots DIR]
+//   node tests/smoke.ts [--chromium /usr/bin/chromium] [--shots DIR]
 //
 // Every page runs on a frozen clock: Date.now starts at NOW (16 October 2026, 10:30 UTC) and runs on
 // from there, so the results never depend on the day the test runs (code review C-6). Some checks
@@ -26,70 +26,74 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-import { launchChromium, openPage, selectsCut, sleep } from './cdp.mjs';
-import { planAlarms } from '../core/alarms.js';
-import { eclipseById } from '../core/eclipses.js';
-import { buildIcs } from '../core/ics.js';
+import { launchChromium, openPage, selectsCut, sleep } from './cdp.ts';
+import type { FromBrowser, Page, PageOptions } from './cdp.ts';
+import { planAlarms } from '#core/alarms.js';
+import { eclipseById } from '#core/eclipses.js';
+import { buildIcs } from '#core/ics.js';
+import type { AlarmSpec } from '#core/types.js';
+import { defined, group } from './helpers.ts';
 
-const arg = (name, dflt) => {
+const arg = <T extends string | null>(name: string, dflt: T): string | T => {
+  // (process.argv[i + 1] may be missing: the default then, as before.)
   const i = process.argv.indexOf(name);
-  return i > 0 ? process.argv[i + 1] : dflt;
+  return i > 0 ? (process.argv[i + 1] ?? dflt) : dflt;
 };
 const chromium = arg('--chromium', '/usr/bin/chromium');
 const shots = arg('--shots', null);
 const work = mkdtempSync(join(tmpdir(), 'eclipse-smoke-'));
 /** The frozen clock: the page's Date.now starts here and runs on in real time. */
 const NOW = Date.parse('2026-10-16T10:30:00Z');
-const clockAt = (t) => `(() => { const real = Date.now.bind(Date); const off = ${t} - real(); Date.now = () => real() + off; })();`;
+const clockAt = (t: number): string => `(() => { const real = Date.now.bind(Date); const off = ${t} - real(); Date.now = () => real() + off; })();`;
 /** Opens a page with the clock frozen at `at` (NOW unless given). */
-const open = (opts = {}, at = NOW) => openPage(browser, base, { timezone: 'Europe/Oslo', ...opts, init: clockAt(at) });
+const open = (opts: PageOptions = {}, at = NOW): Promise<Page> => openPage(browser, base, { timezone: 'Europe/Oslo', ...opts, init: clockAt(at) });
 /** The countdown's digits as one string, 112:05:29:31. */
-const digits = (p) => p.ev("[...document.querySelectorAll('#countdown-timer .cd-num')].map((n) => n.textContent).join(':')");
+const digits = (p: Page): Promise<string> => p.ev("[...document.querySelectorAll('#countdown-timer .cd-num')].map((n) => n.textContent).join(':')");
 /** Every element that is a live region (polite or assertive), by id or class. */
 const LIVE = "[...document.querySelectorAll('[aria-live]:not([aria-live=\"off\"]), [role=status], [role=alert], [role=log]')].map((n) => n.id || n.className)";
 /** Starts recording every change inside a live region; the list comes back from takeLive(). */
-const watchLive = (p) => p.ev(`(() => {
+const watchLive = (p: Page): Promise<void> => p.ev(`(() => {
   window.__live = [];
   window.__liveMo?.disconnect();
   window.__liveMo = new MutationObserver((ms) => { for (const m of ms) { const t = m.target.nodeType === 1 ? m.target : m.target.parentElement; const n = t && t.closest('[aria-live]:not([aria-live="off"]), [role=status], [role=alert], [role=log]'); if (n) window.__live.push((n.id || n.className) + ': ' + n.textContent); } });
   window.__liveMo.observe(document.body, { childList: true, subtree: true, characterData: true });
 })()`);
-const takeLive = (p) => p.ev('window.__live.splice(0)');
+const takeLive = (p: Page): Promise<string[]> => p.ev('window.__live.splice(0)');
 if (shots) mkdirSync(shots, { recursive: true });
 const J = JSON.stringify;
 
 let passed = 0;
-async function check(name, fn) {
+async function check(name: string, fn: () => Promise<void>): Promise<void> {
   try {
     await fn();
     passed += 1;
     console.log(`ok ${passed} ${name}`);
   } catch (err) {
-    console.log(`not ok ${name}\n  ${String(err && err.stack || err).split('\n').join('\n  ')}`);
+    console.log(`not ok ${name}\n  ${String((err as Error | null)?.stack || err).split('\n').join('\n  ')}`);
     await cleanup();
     process.exit(1);
   }
 }
 
 const server = spawn('python3', ['-I', new URL('./serve.py', import.meta.url).pathname, '--quiet'], { stdio: ['ignore', 'pipe', 'inherit'] });
-const base = await new Promise((res, rej) => {
+const base = await new Promise<string>((res, rej) => {
   const t = setTimeout(() => rej(new Error('serve.py did not start')), 15000);
   server.stdout.on('data', (d) => {
     const m = /READY (\S+)/.exec(String(d));
-    if (m) { clearTimeout(t); res(m[1]); }
+    if (m && m[1]) { clearTimeout(t); res(m[1]); }
   });
 });
 const browser = await launchChromium({ chromium, out: join(work, 'chromium') });
-async function cleanup() {
+async function cleanup(): Promise<void> {
   await browser.close().catch(() => {});
   server.kill();
   rmSync(work, { recursive: true, force: true });
 }
 
-const setSelect = (p, selector, value) => p.ev(`(() => { const s = ${selector}; s.focus(); s.value = ${J(value)}; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
-const setTime = (p, selector, value) => p.ev(`(() => { const t = ${selector}; t.focus(); t.value = ${J(value)}; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
-const results = (p) => p.ev("[...document.querySelectorAll('#alarm-rows .alarm-result')].map((n) => n.textContent)");
-const houseStyle = (text, where) => {
+const setSelect = (p: Page, selector: string, value: string): Promise<void> => p.ev(`(() => { const s = ${selector}; s.focus(); s.value = ${J(value)}; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+const setTime = (p: Page, selector: string, value: string): Promise<void> => p.ev(`(() => { const t = ${selector}; t.focus(); t.value = ${J(value)}; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+const results = (p: Page): Promise<string[]> => p.ev("[...document.querySelectorAll('#alarm-rows .alarm-result')].map((n) => n.textContent)");
+const houseStyle = (text: string, where: string): void => {
   assert.doesNotMatch(text, /[–—]/, `${where}: no en or em dash`);
   assert.doesNotMatch(text, /--/, `${where}: no double hyphen`);
   assert.doesNotMatch(text, /!/, `${where}: no exclamation mark`);
@@ -107,7 +111,7 @@ await check('the page loads with no error, no policy violation and no request of
   assert.deepEqual(p.log.csp, []);
   assert.deepEqual(await p.ev('window.__csp'), []);
   assert.deepEqual(p.log.offsite, []);
-  const kinds = new Set(p.log.requests.map((r) => new URL(r.url).pathname.split('?')[0]));
+  const kinds = new Set(p.log.requests.map((r) => new URL(r.url).pathname.split('?')[0] ?? ''));
   assert.ok(kinds.has('/app.js') && kinds.has('/core/alarms.js') && kinds.has('/core/data.js'), 'the modules load');
   assert.ok(![...kinds].some((k) => k.startsWith('/ts/') || k.startsWith('/tools/')), 'no source is requested');
 });
@@ -180,7 +184,7 @@ await check('the filters: lunar only, then penumbral, then back', async () => {
   assert.equal(await p.ev("document.getElementById('list-count').textContent"), '337 eclipses in 74 years.');
 });
 
-const SPECS = [
+const SPECS: AlarmSpec[] = [
   { kind: 'day', daysBefore: 0, time: '12:00' },
   { kind: 'day', daysBefore: 1, time: '12:00' },
   { kind: 'before', minutes: 30 },
@@ -286,20 +290,20 @@ await check('an empty time stops the save and says which alarm', async () => {
 
 await check('the saved calendar file is byte for byte what core/ics.js makes from the same inputs', async () => {
   await p.click('#save-ics');
-  let done = null;
+  let done: FromBrowser = null;
   for (let i = 0; i < 100 && !done; i++) {
     done = p.log.downloads.find((d) => d.state === 'completed');
     if (!done) await sleep(50);
   }
   assert.ok(done, 'the download completed');
-  assert.equal(p.log.downloads.find((d) => d.begin).begin, 'eclipse-2027-02-06-solar.ics');
+  assert.equal(p.log.downloads.find((d) => d.begin)?.begin, 'eclipse-2027-02-06-solar.ics');
   const files = readdirSync(downloads);
   assert.equal(files.length, 1);
-  const saved = readFileSync(join(downloads, files[0]), 'utf8');
-  const uid = /UID:([0-9a-f]{32})@eclipse\.stormberry\.as/.exec(saved)[1];
-  const stamp = /DTSTAMP:(\d{8}T\d{6}Z)/.exec(saved)[1];
+  const saved = readFileSync(join(downloads, defined(files[0], 'the saved file')), 'utf8');
+  const uid = group(/UID:([0-9a-f]{32})@eclipse\.stormberry\.as/, saved);
+  const stamp = group(/DTSTAMP:(\d{8}T\d{6}Z)/, saved);
   const dtstamp = Date.parse(stamp.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, '$1-$2-$3T$4:$5:$6Z'));
-  const e = eclipseById('2027-02-06-solar');
+  const e = defined(eclipseById('2027-02-06-solar'), 'the 2027-02-06 solar eclipse');
   // The page's dtstamp has milliseconds the file drops; planning only compares against it, and all four alarms are months away.
   const want = buildIcs({ eclipse: e, alarms: planAlarms(e, SPECS, 'Europe/Oslo', dtstamp), uid, dtstamp });
   assert.equal(saved, want);
@@ -328,11 +332,12 @@ await check('keyboard only: Tab reaches the next-eclipse button, Enter opens the
 
 await check('the sources, tooling and tests are not served; the app and the data are', async () => {
   // Fetched from Node, not the page: the page's own policy lets it connect nowhere.
-  const paths = ['/ts/app.ts', '/ts/core/alarms.ts', '/tools/build-ts.sh', '/tools/nasa/FETCHLOG.tsv', '/tools/vectors/build-vectors.py', '/tests/smoke.mjs', '/tests/dst-vectors.json',
+  const paths = ['/ts/app.ts', '/ts/core/alarms.ts', '/tools/build-ts.sh', '/tools/nasa/FETCHLOG.tsv', '/tools/vectors/build-vectors.py', '/tests/smoke.ts', '/tests/tsconfig.json', '/tests/dst-vectors.json',
     '/package.json', '/package-lock.json', '/tsconfig.json', '/tsconfig.core.json', '/node_modules/typescript/package.json', '/bump_assets.py', '/README.md',
+    '/ts/app-host.d.ts', '/android/web-overlay/android-bridge.ts', '/android/web-overlay/android-bridge.js',
     '/app.js', '/core/ics.js', '/data/eclipses.json', '/disclaimer.html'];
   const status = await Promise.all(paths.map((u) => fetch(new URL(u, base)).then((r) => r.status)));
-  assert.deepEqual(status, [...Array(14).fill(404), 200, 200, 200, 200]);
+  assert.deepEqual(status, [...Array(18).fill(404), 200, 200, 200, 200]);
 });
 
 await check('the page text keeps the house style, the planner included', async () => {

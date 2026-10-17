@@ -1,2 +1,8 @@
 # TypeScript compiler, installed by tools/build-ts.sh from package-lock.json. Never published.
 node_modules/
+# zsp, the Zapstore publisher, offers to save its signing key to a .env file in the repository
+# root. Never: the key lives in the keyring. These lines keep such a file out of git if it ever
+# appears (as in MoonApp, SunApp and UsernameGenerator since 5 September 2026).
+.env
+.env.*
+!.env.example

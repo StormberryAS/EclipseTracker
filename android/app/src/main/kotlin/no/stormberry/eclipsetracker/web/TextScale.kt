@@ -4,7 +4,7 @@ import kotlin.math.roundToInt
 
 /**
  * How the app enlarges the page's text with Android's font size (fix C, 17 October 2026, S-2).
- * Pure Kotlin, unit tested; tests/app-mode-smoke.mjs reads the two base sizes from this file and
+ * Pure Kotlin, unit tested; tests/app-mode-smoke.ts reads the two base sizes from this file and
  * enlarges the page in Chromium exactly this way.
  *
  * Before fix C the app set the WebView's textZoom to the font scale. textZoom multiplies every

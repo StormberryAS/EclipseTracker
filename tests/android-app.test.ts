@@ -2,7 +2,9 @@
 // the rest of the unit tests: the policy header the app sends is the page's own policy plus the
 // two directives only a header can carry; the permissions are exactly the nine of
 // android/expected-permissions.txt, never INTERNET; backup is off and only the launcher is
-// exported; the bridge script keeps the page's privacy (no fetch, no storage) and the house style;
+// exported; the bridge script keeps the page's privacy (no fetch, no storage) and the house style,
+// in its TypeScript source and in the compiled android-bridge.js the app bundles, which is what
+// that source compiles to (tools/build-ts.sh --check proves it byte for byte);
 // the travel note is Marcos's text exactly, in the app only; and the website's own files know
 // nothing of the app's words.
 
@@ -10,15 +12,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { defined, group } from './helpers.ts';
 
-const read = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8');
+const read = (rel: string): string => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8');
 const KT = 'android/app/src/main/kotlin/no/stormberry/eclipsetracker';
+const BRIDGE_TS = 'android/web-overlay/android-bridge.ts';
+const BRIDGE_JS = 'android/web-overlay/android-bridge.js';
 const A4 = "Ringing alarms follow your phone's time zone: if you travel, a 12.00 alarm rings at 12.00 where you are. Alarms before greatest eclipse always follow the eclipse.";
 
 test("the app's policy header is the page's meta policy plus frame-ancestors and upgrade-insecure-requests", () => {
-  const meta = /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/.exec(read('index.html'))[1];
+  const meta = group(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/, read('index.html'));
   const kt = read(`${KT}/web/ResponseHeaders.kt`);
-  const header = /CONTENT_SECURITY_POLICY =\s*([\s\S]*?)\n\n/.exec(kt)[1].match(/"([^"]*)"/g).map((s) => s.slice(1, -1)).join('');
+  const header = defined(group(/CONTENT_SECURITY_POLICY =\s*([\s\S]*?)\n\n/, kt).match(/"([^"]*)"/g), 'the policy strings').map((s) => s.slice(1, -1)).join('');
   assert.equal(header, `${meta}; frame-ancestors 'none'; upgrade-insecure-requests`);
   assert.match(header, /connect-src 'none'/);
 });
@@ -29,9 +34,9 @@ test("fix C, M-1: the disclaimer's one style element is allowed by its hash, on 
   assert.equal(blocks.length, 1, 'one style element');
   assert.doesNotMatch(html, /\sstyle\s*=/i, 'no style attribute');
   assert.doesNotMatch(html, /<script\b/i, 'no script');
-  const hash = `sha256-${createHash('sha256').update(blocks[0][2], 'utf8').digest('base64')}`;
+  const hash = `sha256-${createHash('sha256').update(defined(blocks[0]?.[2], 'the style element'), 'utf8').digest('base64')}`;
   const kt = read(`${KT}/web/ResponseHeaders.kt`);
-  assert.equal(/DISCLAIMER_STYLE_HASH = "([^"]+)"/.exec(kt)[1], hash, 'ResponseHeaders.DISCLAIMER_STYLE_HASH is the hash of the style element');
+  assert.equal(group(/DISCLAIMER_STYLE_HASH = "([^"]+)"/, kt), hash, 'ResponseHeaders.DISCLAIMER_STYLE_HASH is the hash of the style element');
   assert.match(kt, /DISCLAIMER_ASSET = "web\/disclaimer\.html"/);
   assert.match(kt, /CONTENT_SECURITY_POLICY\.replace\("style-src 'self';", "style-src 'self' '\$DISCLAIMER_STYLE_HASH';"\)/);
   assert.match(read(`${KT}/web/WebAssetHandler.kt`), /ResponseHeaders\.forAsset\(assetPath\)/);
@@ -84,19 +89,22 @@ test('no backup, and only the launcher is exported', () => {
 });
 
 test('the bridge script keeps the page private and is the only channel', () => {
-  const js = read('android/web-overlay/android-bridge.js');
-  const code = js.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
-  for (const bad of [/\bfetch\s*\(/, /XMLHttpRequest/, /localStorage/, /sessionStorage/, /indexedDB/, /document\.cookie/, /\beval\s*\(/, /new Function/, /innerHTML/, /addJavascriptInterface/]) {
-    assert.doesNotMatch(code, bad);
+  // Both the TypeScript source and the compiled script the app bundles.
+  for (const f of [BRIDGE_TS, BRIDGE_JS]) {
+    const code = read(f).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    for (const bad of [/\bfetch\s*\(/, /XMLHttpRequest/, /localStorage/, /sessionStorage/, /indexedDB/, /document\.cookie/, /\beval\s*\(/, /new Function/, /innerHTML/, /addJavascriptInterface/]) {
+      assert.doesNotMatch(code, bad, `${f}: ${bad}`);
+    }
+    assert.match(code, /window\.ETBridge/, f);
+    assert.match(code, /window\.EclipseTrackerApp = Object\.freeze/, f);
+    // A classic script, as the app loads it with a plain script tag: no import or export left.
+    assert.doesNotMatch(code, /^\s*(import|export)\b/m, f);
   }
-  assert.match(code, /window\.ETBridge/);
   assert.match(read(`${KT}/MainActivity.kt`), /BRIDGE_NAME = "ETBridge"/);
-  assert.match(code, /window\.EclipseTrackerApp = Object\.freeze/);
 });
 
 test("the travel note is Marcos's text exactly, and only in the app", () => {
-  const js = read('android/web-overlay/android-bridge.js');
-  assert.ok(js.includes(`TRAVEL: "${A4}"`));
+  for (const f of [BRIDGE_TS, BRIDGE_JS]) assert.ok(read(f).includes(`TRAVEL: "${A4}"`), f);
   for (const f of ['index.html', 'app.js', 'ts/app.ts', 'style.css']) {
     assert.ok(!read(f).includes('Ringing alarms follow'), `${f} does not carry the app's travel note`);
     assert.ok(!read(f).includes('Set ringing alarms'), `${f} does not carry the app's words`);
@@ -104,12 +112,17 @@ test("the travel note is Marcos's text exactly, and only in the app", () => {
 });
 
 test("the app's own words keep the house style", () => {
-  const js = read('android/web-overlay/android-bridge.js');
-  const words = /var T = \{([\s\S]*?)\n {2}\};/.exec(js)[1];
-  const strings = [...words.matchAll(/'([^']*)'|"([^"]*)"/g)].map((m) => m[1] ?? m[2]).filter((s) => / /.test(s));
+  const words = group(/const T = \{([\s\S]*?)\n {2}\} as const;/, read(BRIDGE_TS));
+  const strings = [...words.matchAll(/'([^']*)'|"([^"]*)"/g)].map((m) => m[1] ?? m[2] ?? '').filter((s) => / /.test(s));
   assert.ok(strings.length >= 20, `${strings.length} texts`);
+  // The compiled script carries every one of them, quotes and all (the comments apart, which the
+  // compiler leaves out).
+  const compiled = read(BRIDGE_JS);
+  const literals = [...words.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/'([^']*)'|"([^"]*)"/g)].map((m) => m[0]);
+  assert.ok(literals.length >= 20, `${literals.length} literals`);
+  for (const s of literals) assert.ok(compiled.includes(s), `android-bridge.js carries ${s}`);
   const xml = read('android/app/src/main/res/values/strings.xml').replace(/<!--[\s\S]*?-->/g, '');
-  const res = [...xml.matchAll(/<string name="([^"]+)">([^<]*)<\/string>/g)].map((m) => [m[1], m[2]]);
+  const res = [...xml.matchAll(/<string name="([^"]+)">([^<]*)<\/string>/g)].map((m): [string, string] => [m[1] ?? '', m[2] ?? '']);
   assert.ok(res.length >= 14);
   for (const s of [...strings, ...res.map((r) => r[1])]) {
     assert.doesNotMatch(s, /[–—!]|--/, s);
@@ -131,4 +144,35 @@ test('the alarm engine never rings late and arms the nearest 100 (the numbers th
   assert.match(read(`${KT}/alarm/AlarmScheduling.kt`), /createDeviceProtectedStorageContext/);
   assert.match(read(`${KT}/alarm/AlarmService.kt`), /isLooping = true/);
   assert.match(read(`${KT}/alarm/AlarmService.kt`), /setFullScreenIntent/);
+});
+
+// android/tools/apk-without-signature.ts, the README's tool for comparing a release with your own
+// build: a signing block between the entries and the central directory is removed, the offset in the
+// end-of-central-directory record moves back with it, and an unsigned zip comes out as it went in.
+test('apk-without-signature: removes the APK Signing Block and moves the central directory offset back', async () => {
+  const { withoutSignature, strippedSha256 } = await import('../android/tools/apk-without-signature.ts');
+  const entries = new TextEncoder().encode('ENTRIES.');
+  const cd = new TextEncoder().encode('CENTRALDIR');
+  const eocd = (cdOffset: number): Uint8Array => {
+    const e = new Uint8Array(22); const v = new DataView(e.buffer);
+    v.setUint32(0, 0x06054b50, true); v.setUint32(12, cd.length, true); v.setUint32(16, cdOffset, true);
+    return e;
+  };
+  const cat = (...parts: Uint8Array[]): Uint8Array => {
+    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let at = 0;
+    for (const p of parts) { out.set(p, at); at += p.length; }
+    return out;
+  };
+  const unsigned = cat(entries, cd, eocd(entries.length));
+  const pair = new Uint8Array(12); new DataView(pair.buffer).setBigUint64(0, 4n, true); new DataView(pair.buffer).setUint32(8, 0x7109871a, true);
+  const size = BigInt(pair.length + 8 + 16);
+  const head = new Uint8Array(8); new DataView(head.buffer).setBigUint64(0, size, true);
+  const block = cat(head, pair, head, new TextEncoder().encode('APK Sig Block 42'));
+  const signed = cat(entries, block, cd, eocd(entries.length + block.length));
+  assert.deepEqual(withoutSignature(signed), unsigned);
+  assert.deepEqual(withoutSignature(unsigned), unsigned);
+  assert.equal(strippedSha256(signed), strippedSha256(unsigned));
+  const broken = signed.slice(); new DataView(broken.buffer).setBigUint64(entries.length, 99n, true);
+  assert.throws(() => withoutSignature(broken), /disagree/);
+  assert.throws(() => withoutSignature(new Uint8Array(40)), /not a zip/);
 });

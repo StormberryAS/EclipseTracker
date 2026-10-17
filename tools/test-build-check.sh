@@ -11,6 +11,9 @@
 #   * a hand edit to a compiled file
 #   * a source in ts/core/ that uses the DOM (code review C-17)
 #   * a stale ?v= stamp
+#   * a hand edit to the Android bridge script's compiled android-bridge.js (17 October 2026)
+#   * a type error in android/web-overlay/android-bridge.ts (17 October 2026)
+#   * a type error in a test (17 October 2026)
 # and the untouched copy, expected to PASS. Prints one line per case; exits 1 on any surprise.
 set -euo pipefail
 
@@ -65,6 +68,22 @@ cp "$copy/index.html" "$work/index.html"
 sed -i -E 's/app\.js\?v=[0-9a-f]{8}/app.js?v=00000000/' "$copy/index.html"
 expect fail "a stale ?v= stamp on app.js" "index.html"
 cp "$work/index.html" "$copy/index.html"
+
+B=android/web-overlay/android-bridge
+cp "$copy/$B.js" "$work/bridge.js"
+sed -i 's/TIMEOUT_MS = 8000/TIMEOUT_MS = 800/' "$copy/$B.js"
+expect fail "a hand edit to $B.js" "$B.js is NOT what $B.ts compiles to"
+cp "$work/bridge.js" "$copy/$B.js"
+
+cp "$copy/$B.ts" "$work/bridge.ts"
+sed -i 's/const TIMEOUT_MS = 8000;/const TIMEOUT_MS: string = 8000;/' "$copy/$B.ts"
+expect fail "a type error in $B.ts" "$B.ts does not compile"
+cp "$work/bridge.ts" "$copy/$B.ts"
+
+cp "$copy/tests/zoned.test.ts" "$work/zoned.test.ts"
+sed -i 's/^const at = (s: string): number =>/const at = (s: number): number =>/' "$copy/tests/zoned.test.ts"
+expect fail "a type error in tests/zoned.test.ts" "the tests (tests/*.ts) do not type-check"
+cp "$work/zoned.test.ts" "$copy/tests/zoned.test.ts"
 
 expect pass "the copy restored"
 exit "$fails"
