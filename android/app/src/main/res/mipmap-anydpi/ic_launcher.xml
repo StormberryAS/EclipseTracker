@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 7.0 and 7.1 (no adaptive icons): the foreground's drawing on a dark rounded tile in the
+  page's colour, the mark a little larger (scale 0.9) because nothing is cropped here.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="@color/icon_background" android:pathData="M20,0 H88 A20,20 0 0,1 108,20 V88 A20,20 0 0,1 88,108 H20 A20,20 0 0,1 0,88 V20 A20,20 0 0,1 20,0 Z" />
+    <group
+        android:scaleX="0.9"
+        android:scaleY="0.9"
+        android:translateX="9"
+        android:translateY="9">
+        <path android:pathData="M6,50 A44,44 0 1,0 94,50 A44,44 0 1,0 6,50 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="radial" android:centerX="50" android:centerY="50" android:gradientRadius="44">
+                    <item android:offset="0" android:color="#99FDFCA3" />
+                    <item android:offset="0.8" android:color="#99FDFCA3" />
+                    <item android:offset="1" android:color="#00FDFCA3" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:fillColor="#FFFFFFFF" android:pathData="M19,50 A31,31 0 1,0 81,50 A31,31 0 1,0 19,50 Z" />
+        <path android:fillColor="#FF080C18" android:pathData="M-32,50 A32,32 0 1,0 32,50 A32,32 0 1,0 -32,50 Z" />
+    </group>
+</vector>

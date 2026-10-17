@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  API 31 and above. Nothing leaves the device: neither the app's data directory nor the
+  device-protected one with the alarm records. device-transfer matters most, because that path is
+  not governed by allowBackup at all.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="device_root" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="device_root" />
+    </device-transfer>
+</data-extraction-rules>

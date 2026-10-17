@@ -1,0 +1,16 @@
+{
+  "name": "eclipsetracker",
+  "private": true,
+  "type": "module",
+  "description": "Build and test tooling only: compiles ts/ into the JavaScript the page loads (app.js and core/), and runs the tests. The published site has no runtime dependencies.",
+  "license": "MIT",
+  "scripts": {
+    "build": "tools/build-ts.sh",
+    "check": "tools/build-ts.sh --check",
+    "test": "node --test tests/",
+    "smoke": "node tests/smoke.mjs"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}

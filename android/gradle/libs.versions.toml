@@ -1,0 +1,27 @@
+[versions]
+# Pinned deliberately, every one an exact version, and kept the same as GDPRLetterBuilder's (the
+# WebView template of this app) and SunApp's (the template of its alarm engine), so the Labs apps
+# move together. A bump is a deliberate, reviewed act: check the release is at least 14 days old.
+agp = "9.3.1"            # AGP 9.3.x: Gradle 9.5.0, JDK 17 minimum, built-in Kotlin 2.2.10
+activity = "1.13.0"      # as GDPRLetterBuilder and SunApp
+coreKtx = "1.19.0"       # as GDPRLetterBuilder and SunApp
+webkit = "1.17.0"        # as GDPRLetterBuilder 0.0.1 and CheckLink 0.0.1; their DEP-1 moves to
+                         # 1.17.1 from 2026-10-20, and this app follows in the same review
+# java.time on minSdk 24: SunApp's and MoonApp's library desugaring, the same version. The
+# alarm planner is java.time (spec 9.5: ZonedDateTime.of, withEarlierOffsetAtOverlap).
+desugarJdkLibs = "2.1.5"
+junit = "4.13.2"
+# Unit-test classpath only, as SunApp: the framework ships org.json, but the mockable android.jar
+# stubs every method to throw, so the record and message checks need a real implementation there.
+json = "20260522"
+
+[libraries]
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+json = { group = "org.json", name = "json", version.ref = "json" }
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
+androidx-activity = { group = "androidx.activity", name = "activity", version.ref = "activity" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }

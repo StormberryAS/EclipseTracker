@@ -1,0 +1,40 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Stormberry AS//EclipseTracker 2.0//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:0123456789abcdef0123456789abcdef@eclipse.stormberry.as
+DTSTAMP:20261016T103000Z
+DTSTART:20270206T160000Z
+DTEND:20270206T163000Z
+SUMMARY:Annular solar eclipse
+DESCRIPTION:Annular solar eclipse. Greatest eclipse at 16:00 UTC on 6 Febru
+ ary 2027.\nMagnitude: 0.928.\nVisible from: South America\, Antarctica\, w
+ estern and southern Africa.\nPath of the annular eclipse: Chile\, Argentin
+ a\, Atlantic.\n\nTimes from NASA's eclipse catalogue (Fred Espenak\, NASA 
+ Goddard Space Flight Center)\, rounded to the minute.\nMade with EclipseTr
+ acker by Stormberry AS\, eclipse.stormberry.as.
+TRANSP:TRANSPARENT
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Annular solar eclipse
+TRIGGER:-P7DT8H30M
+END:VALARM
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Annular solar eclipse
+TRIGGER:-P1DT5H
+END:VALARM
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Annular solar eclipse
+TRIGGER:-PT5H
+END:VALARM
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Annular solar eclipse
+TRIGGER:-PT30M
+END:VALARM
+END:VEVENT
+END:VCALENDAR

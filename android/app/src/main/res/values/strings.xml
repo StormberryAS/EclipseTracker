@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Every text here is new to the app (stage B, 16 October 2026) and awaits Marcos's approval,
+         except the eclipse names and alarm words, which the app takes from the web app's approved
+         texts (core/Eclipses.kt, Words). British English, no dashes, no exclamation marks. Toasts
+         stay at 66 characters or fewer (CheckLink's rule). -->
+    <string name="app_name">EclipseTracker</string>
+
+    <!-- Notification channels, as Android's settings list them. -->
+    <string name="channel_ring_name">Ringing alarms</string>
+    <string name="channel_ring_description">The alarm itself, while it rings.</string>
+    <string name="channel_notices_name">Snoozed and missed alarms</string>
+    <string name="channel_notices_description">Says when an alarm was snoozed or rang with no answer.</string>
+    <!-- Fix B (16 October 2026, A-2 and A-4), awaiting Marcos's approval: the backup ring, used
+         when Android does not let the ringing service start. -->
+    <string name="channel_backup_name">Ringing alarms, backup</string>
+    <string name="channel_backup_description">Used when Android does not let EclipseTracker ring in full: the phone\'s alarm sound and the alarm on screen.</string>
+
+    <!-- The ring screen and the ring notification. The title is the eclipse's name ("Annular solar
+         eclipse"), the text the alarm's words ("1 day before at 12:00"); this is the title only
+         when the eclipse cannot be read. -->
+    <string name="alarm_default_title">Eclipse alarm</string>
+    <string name="action_snooze">Snooze 9 minutes</string>
+    <string name="action_dismiss">Dismiss</string>
+    <string name="snoozed_title">%1$s, snoozed</string>
+    <string name="snoozed_text">Rings again at %1$s.</string>
+    <string name="missed_title">Missed: %1$s</string>
+    <string name="missed_text">Rang for 10 minutes with no answer.</string>
+    <!-- Fix B (A-5), awaiting Marcos's approval: an alarm still ringing when the next one began. -->
+    <string name="missed_replaced_text">Rang with no answer until the next alarm began.</string>
+    <!-- Fix D (17 October 2026, N-3), awaiting Marcos's approval: an alarm that never rang, as its
+         time came while the phone was off or restarting, or Android held it back too long. -->
+    <string name="missed_not_rung_text">The phone could not ring this alarm on time.</string>
+
+    <!-- Toasts. -->
+    <string name="no_app_for_link">No app on this device can open that link.</string>
+    <string name="webview_too_old">Parts of this app need a newer Android System WebView. Update it.</string>
+    <string name="page_reloaded">The app stopped and reloaded. Your ringing alarms are kept.</string>
+</resources>

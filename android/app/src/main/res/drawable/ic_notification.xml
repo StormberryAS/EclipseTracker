@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The notification's small icon: the sun's crescent of the launcher icon's monochrome layer, in
+     favicon.svg's own 100 unit coordinates. Android paints it in one colour. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M25.63,30.84 A31,31 0 1,1 25.63,69.16 A32,32 0 0,0 25.63,30.84 Z" />
+</vector>

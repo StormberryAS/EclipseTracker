@@ -1,0 +1,10 @@
+package: no.stormberry.eclipsetracker
+uses-permission: name='android.permission.USE_EXACT_ALARM'
+uses-permission: name='android.permission.SCHEDULE_EXACT_ALARM' maxSdkVersion='32'
+uses-permission: name='android.permission.POST_NOTIFICATIONS'
+uses-permission: name='android.permission.RECEIVE_BOOT_COMPLETED'
+uses-permission: name='android.permission.WAKE_LOCK'
+uses-permission: name='android.permission.VIBRATE'
+uses-permission: name='android.permission.USE_FULL_SCREEN_INTENT'
+uses-permission: name='android.permission.FOREGROUND_SERVICE'
+uses-permission: name='android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED'

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en-GB">
 <head>
   <!--
     Daniel 3:62 - Sixto-Clementine Vulgate / Douay-Rheims
@@ -7,25 +7,33 @@
     O ye sun and moon, bless the Lord: praise and exalt him above all for ever.
   -->
   <!--
-    Stormberry Labs - EclipseTracker
-    Offline deterministic eclipse calculator.
+    Stormberry Labs: EclipseTracker.
+    Every solar and lunar eclipse to 2100 from NASA's catalogue, a countdown to the next one, and
+    alarms saved as a calendar file. Runs in the browser and sends nothing.
   -->
   <meta charset="UTF-8" />
+  <!--
+    The page's own policy, on top of the zone's header: only this site's own scripts, styles,
+    images and fonts, and no connection of any kind (code review C-5, 2026-10-16; the same policy
+    as GDPRLetterBuilder's). It matters most inside stage B's WebView, where no zone header applies.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'none'; form-action 'none'; object-src 'none'; base-uri 'none'; worker-src 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="referrer" content="no-referrer" />
 
   <!-- SEO -->
-  <title>EclipseTracker | Deterministic Offline Eclipse Countdown</title>
+  <title>EclipseTracker | Every Solar and Lunar Eclipse to 2100</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
-  <meta name="description" content="Offline countdown to the next major global solar and lunar eclipses. Sovereign, no APIs, fully deterministic." />
+  <meta name="description" content="Every solar and lunar eclipse to 2100 from NASA's catalogue, a countdown to the next one, and alarms you can save to your own calendar. Runs in your browser." />
 
   <!-- Local Fonts: Inter -->
   <link rel="stylesheet" href="fonts/inter/inter.css?v=868d674e" />
 
-  <link rel="stylesheet" href="style.css?v=d4737315" />
+  <link rel="stylesheet" href="style.css?v=f51c567e" />
   <link rel="canonical" href="https://eclipse.stormberry.as/" />
   
-  <meta property="og:title" content="EclipseTracker | Deterministic Offline Eclipse Countdown" />
-  <meta property="og:description" content="Offline countdown to the next major global solar and lunar eclipses. Sovereign, no APIs, fully deterministic." />
+  <meta property="og:title" content="EclipseTracker | Every Solar and Lunar Eclipse to 2100" />
+  <meta property="og:description" content="Every solar and lunar eclipse to 2100 from NASA's catalogue, a countdown to the next one, and alarms you can save to your own calendar. Runs in your browser." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://eclipse.stormberry.as/" />
   <meta property="og:image" content="https://stormberry.as/og-image.jpg" />
@@ -44,38 +52,97 @@
   </header>
 
   <main class="main-content">
-    <div class="card">
+    <noscript>
+      <p class="card noscript">EclipseTracker needs JavaScript to count down to the next eclipse and to work out alarm times. Nothing is sent anywhere: it all runs in your browser.</p>
+    </noscript>
+
+    <section class="card" aria-labelledby="eclipse-type">
       <div class="countdown-section">
-        <h2 id="eclipse-type">Calculating...</h2>
-        <div class="countdown-display" id="countdown-timer">--:--:--:--</div>
-        <div class="countdown-labels">
-          <span>Days</span>
-          <span>Hrs</span>
-          <span>Min</span>
-          <span>Sec</span>
+        <p class="eyebrow">Next eclipse</p>
+        <h2 id="eclipse-type">Loading the eclipse list</h2>
+        <!-- Each number with its label under it; the groups wrap at narrow widths and large text
+             instead of being cut off (code review C-8). The labels are hidden from screen readers,
+             which read the sentence in #countdown-words instead. -->
+        <div class="countdown-display" id="countdown-timer" role="timer" aria-describedby="countdown-words">
+          <span class="cd-part"><span class="cd-group"><span class="cd-num" id="cd-days">00</span><span class="cd-label" aria-hidden="true">Days</span></span><span class="cd-sep">:</span></span>
+          <span class="cd-part"><span class="cd-group"><span class="cd-num" id="cd-hours">00</span><span class="cd-label" aria-hidden="true">Hrs</span></span><span class="cd-sep">:</span></span>
+          <span class="cd-part"><span class="cd-group"><span class="cd-num" id="cd-minutes">00</span><span class="cd-label" aria-hidden="true">Min</span></span><span class="cd-sep">:</span></span>
+          <span class="cd-part"><span class="cd-group"><span class="cd-num" id="cd-seconds">00</span><span class="cd-label" aria-hidden="true">Sec</span></span></span>
         </div>
+        <p class="sr-only" id="countdown-words"></p>
       </div>
-      
-      <div class="event-details" id="event-details">
+
+      <dl class="event-details" id="event-details">
         <div class="event-row">
-          <span class="event-label">Date</span>
-          <span class="event-value" id="eclipse-date">--</span>
+          <dt class="event-label">Date</dt>
+          <dd class="event-value" id="eclipse-date"></dd>
         </div>
         <div class="event-row">
-          <span class="event-label">Visibility Region</span>
-          <span class="event-value" id="eclipse-region">--</span>
+          <dt class="event-label">Visibility Region</dt>
+          <dd class="event-value" id="eclipse-region"></dd>
+        </div>
+        <div class="event-row" id="eclipse-path-row" hidden>
+          <dt class="event-label">Central path</dt>
+          <dd class="event-value" id="eclipse-path"></dd>
         </div>
         <div class="event-row">
-          <span class="event-label">Type</span>
-          <span class="event-value" id="eclipse-type-detail">--</span>
+          <dt class="event-label">Type</dt>
+          <dd class="event-value" id="eclipse-type-detail"></dd>
         </div>
         <div class="event-row">
-          <span class="event-label">Magnitude</span>
-          <span class="event-value" id="eclipse-magnitude">--</span>
+          <dt class="event-label" id="eclipse-magnitude-label">Magnitude</dt>
+          <dd class="event-value" id="eclipse-magnitude"></dd>
         </div>
+      </dl>
+      <div class="card-actions">
+        <button type="button" class="btn btn-primary" id="next-alarms" disabled>Set alarms for this eclipse</button>
       </div>
-    </div>
+    </section>
+
+    <section class="card list-card" aria-labelledby="list-heading">
+      <h2 id="list-heading" class="list-heading" tabindex="-1">Every eclipse to 2100</h2>
+      <p class="list-intro">Solar and lunar eclipses from NASA's eclipse catalogue, with the time of greatest eclipse in your own time zone. Open a year to see its eclipses.</p>
+      <div class="filters">
+        <label class="field">
+          <span class="field-label">Show</span>
+          <select id="filter-kind">
+            <option value="all">Solar and lunar</option>
+            <option value="solar">Solar eclipses</option>
+            <option value="lunar">Lunar eclipses</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">Type</span>
+          <select id="filter-type">
+            <option value="all">Any type</option>
+          </select>
+        </label>
+      </div>
+      <p class="list-count" id="list-count" role="status"></p>
+      <div id="eclipse-list" class="eclipse-list"></div>
+      <p class="list-source">Source: Fred Espenak, NASA Goddard Space Flight Center, eclipse catalogue and decade tables at eclipse.gsfc.nasa.gov. Times are rounded to the minute. Even for the next few years they may be a minute out, because the catalogue's estimate of the Earth's rotation differs by a few seconds from what has been measured since; for eclipses decades away the difference can grow to a few minutes.</p>
+    </section>
   </main>
+
+  <dialog id="planner" class="planner" aria-labelledby="planner-title" aria-describedby="planner-when planner-zone">
+    <div class="planner-inner">
+      <h2 id="planner-title" class="planner-title">Alarms</h2>
+      <p id="planner-when" class="planner-when"></p>
+      <p id="planner-zone" class="planner-zone"></p>
+      <ol id="alarm-rows" class="alarm-rows"></ol>
+      <p id="planner-three" class="planner-three" hidden>Some calendar apps keep only the first three alarms.</p>
+      <button type="button" id="add-alarm" class="btn btn-secondary">Add another alarm</button>
+      <p id="planner-status" class="planner-status"></p>
+      <!-- The planner's one live region: status messages, and the new result of the alarm just
+           changed. The result lines themselves are the controls' descriptions (code review C-3). -->
+      <p id="planner-live" class="sr-only" aria-live="polite" aria-atomic="true"></p>
+      <div class="planner-actions">
+        <button type="button" id="save-ics" class="btn btn-primary">Save the calendar file</button>
+        <button type="button" id="close-planner" class="btn btn-secondary">Close</button>
+      </div>
+      <p class="planner-note">Open the saved file with your calendar app: your calendar keeps the eclipse and rings the alarms. Some calendars, Google Calendar among them, leave out the alarms in a file and use their own reminders instead. EclipseTracker sends nothing and keeps nothing.</p>
+    </div>
+  </dialog>
 
   <section class="app-switcher-container" aria-labelledby="switcher-title">
     <h2 class="switcher-title" id="switcher-title">Explore the Stormberry Ecosystem</h2>
@@ -295,7 +362,7 @@
         <p class="footer-tagline">Smarter sales. Global culture. AI-driven strategy.</p>
       </div>
       <div class="footer-powered">
-        <p>Powered by an embedded table of upcoming eclipses. Runs entirely in your browser.</p>
+        <p>Powered by NASA's eclipse catalogue (Fred Espenak, NASA GSFC), built into the page. Runs entirely in your browser.</p>
       </div>
     </div>
     <div class="footer-bottom">
@@ -311,6 +378,6 @@
     </div>
   </footer>
 
-  <script src="app.js?v=9df79398"></script>
+  <script type="module" src="app.js?v=89825ffe"></script>
 </body>
 </html>

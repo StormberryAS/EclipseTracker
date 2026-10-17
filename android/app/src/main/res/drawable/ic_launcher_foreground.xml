@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive-icon foreground for EclipseTracker. Drawn from the web app's favicon.svg (viewBox 100 x 100) as it shows without animation:
+  the corona (r 36, #fdfca3 at 60%, with a soft glow), the sun (r 31, white) and the moon
+  (r 32, #080c18) at its starting place, centre (0, 50), which leaves a partial eclipse. Vector
+  drawables have no blur filter, so the glow is a radial gradient fading out to r 44.
+  Scaled 0.75 about the sun's centre into the 108 unit viewport, so the corona's glow (r 44) ends
+  at the 33 unit radius of the safe zone that launchers never crop.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.75"
+        android:scaleY="0.75"
+        android:translateX="16.5"
+        android:translateY="16.5">
+        <path android:pathData="M6,50 A44,44 0 1,0 94,50 A44,44 0 1,0 6,50 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="radial" android:centerX="50" android:centerY="50" android:gradientRadius="44">
+                    <item android:offset="0" android:color="#99FDFCA3" />
+                    <item android:offset="0.8" android:color="#99FDFCA3" />
+                    <item android:offset="1" android:color="#00FDFCA3" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:fillColor="#FFFFFFFF" android:pathData="M19,50 A31,31 0 1,0 81,50 A31,31 0 1,0 19,50 Z" />
+        <path android:fillColor="#FF080C18" android:pathData="M-32,50 A32,32 0 1,0 32,50 A32,32 0 1,0 -32,50 Z" />
+    </group>
+</vector>

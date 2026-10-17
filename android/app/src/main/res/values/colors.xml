@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The page's own colours (style.css): bg-base, text-primary, text-secondary. -->
+    <color name="page_background">#030305</color>
+    <color name="icon_background">#030305</color>
+    <color name="text_primary">#F8F8F8</color>
+    <color name="text_secondary">#90909A</color>
+</resources>

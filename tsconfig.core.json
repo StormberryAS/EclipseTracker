@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": [
+      "ES2020"
+    ],
+    "noEmit": true
+  },
+  "include": [
+    "ts/core/**/*.ts"
+  ]
+}

@@ -13,8 +13,30 @@
 #
 # disclaimer.html and privacy.html are deliberately NOT excluded: they are the published
 # pages the footer links to. Only the Markdown sources are withheld.
+#
+# The TypeScript move (EclipseTracker 2.0, staged 2026-10-16, the Website's 2026-10-14 pattern):
+# the TypeScript sources (ts/), the build and data tooling with the archived NASA pages (tools/),
+# the tests (tests/), the package files, tsconfig.json and the installed compiler (node_modules/,
+# never committed) are excluded, and so is tsconfig.core.json (the DOM-free check of ts/core/, added
+# 2026-10-16 after the code review). The page loads only the compiled app.js and core/*.js, which ARE
+# published. data/eclipses.json is published on purpose: it is the same eclipse list as JSON, for
+# the Android app and anyone who wants it.
+#
+# The Android app (EclipseTracker 2.0 stage B, staged 2026-10-16): its Gradle project lives in
+# android/ beside the website, as GDPRLetterBuilder's does, and is never published; its build copies
+# the published files into the APK byte for byte and checks them against this list.
 exclude:
   - DISCLAIMER.md
   - LICENSE
   - README.md
   - bump_assets.py
+  - .npmrc
+  - node_modules/
+  - package.json
+  - package-lock.json
+  - tsconfig.json
+  - tsconfig.core.json
+  - ts/
+  - tools/
+  - tests/
+  - android/

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The one folder Add to calendar hands over from (spec 9.6): cache/calendar/, emptied before
+     every write. Nothing else of the app can be named through the provider. -->
+<paths>
+    <cache-path name="calendar" path="calendar/" />
+</paths>

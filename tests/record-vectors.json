@@ -1,0 +1,252 @@
+{
+ "about": "What a re-plan does with one stored alarm record (spec section 9.4; core/alarms.js recordFate), made by tools/vectors/build-vectors.py with Python's zoneinfo as the oracle. stage B's Kotlin port must give the same answer for every case. eclipse is the bundled eclipse with the record's eclipseId (null: none); want is {action: arm, fireAt} or {action: delete, reason: invalid | unknown-eclipse | expired | passed}. Instants are UTC, YYYY-MM-DDTHH:MM:SSZ.",
+ "graceHours": 48,
+ "cases": [
+  {
+   "name": "C-1: the phone restarts after greatest eclipse (00:13 in Oslo) but before an alarm set for noon that day: the record is armed, not deleted",
+   "record": {
+    "v": 1,
+    "id": "0123456789abcdef0123456789abcdef",
+    "eclipseId": "2027-02-20-lunar",
+    "spec": {
+     "kind": "day",
+     "daysBefore": 0,
+     "time": "12:00"
+    }
+   },
+   "eclipse": {
+    "id": "2027-02-20-lunar",
+    "greatest": "2027-02-20T23:12:50Z"
+   },
+   "zone": "Europe/Oslo",
+   "now": "2027-02-21T01:00:00Z",
+   "want": {
+    "action": "arm",
+    "fireAt": "2027-02-21T11:00:00Z"
+   }
+  },
+  {
+   "name": "the same alarm at the moment it rings: its time has passed, so the re-plan after the ring deletes it",
+   "record": {
+    "v": 1,
+    "id": "0123456789abcdef0123456789abcdef",
+    "eclipseId": "2027-02-20-lunar",
+    "spec": {
+     "kind": "day",
+     "daysBefore": 0,
+     "time": "12:00"
+    }
+   },
+   "eclipse": {
+    "id": "2027-02-20-lunar",
+    "greatest": "2027-02-20T23:12:50Z"
+   },
+   "zone": "Europe/Oslo",
+   "now": "2027-02-21T11:00:00Z",
+   "want": {
+    "action": "delete",
+    "reason": "passed"
+   }
+  },
+  {
+   "name": "a before-alarm after greatest eclipse has passed and is deleted",
+   "record": {
+    "v": 1,
+    "id": "0123456789abcdef0123456789abcdef",
+    "eclipseId": "2027-02-20-lunar",
+    "spec": {
+     "kind": "before",
+     "minutes": 30
+    }
+   },
+   "eclipse": {
+    "id": "2027-02-20-lunar",
+    "greatest": "2027-02-20T23:12:50Z"
+   },
+   "zone": "Europe/Oslo",
+   "now": "2027-02-21T01:00:00Z",
+   "want": {
+    "action": "delete",
+    "reason": "passed"
+   }
+  },
+  {
+   "name": "an alarm still to come is armed",
+   "record": {
+    "v": 1,
+    "id": "0123456789abcdef0123456789abcdef",
+    "eclipseId": "2027-02-06-solar",
+    "spec": {
+     "kind": "day",
+     "daysBefore": 7,
+     "time": "08:30"
+    }
+   },
+   "eclipse": {
+    "id": "2027-02-06-solar",
+    "greatest": "2027-02-06T15:59:32Z"
+   },
+   "zone": "Europe/Oslo",
+   "now": "2026-10-16T12:00:00Z",
+   "want": {
+    "action": "arm",
+    "fireAt": "2027-01-30T07:30:00Z"
+   }
+  },
+  {
+   "name": "missed: the phone was off at 12:00, so at the next re-plan the alarm is deleted, never rung late",
+   "record": {
+    "v": 1,
+    "id": "0123456789abcdef0123456789abcdef",
+    "eclipseId": "2027-02-06-solar",
+    "spec": {
+     "kind": "day",
+     "daysBefore": 0,
+     "time": "12:00"
+    }
+   },
+   "eclipse": {
+    "id": "2027-02-06-solar",
+    "greatest": "2027-02-06T15:59:32Z"
+   },
+   "zone": "Europe/Oslo",
+   "now": "2027-02-06T11:30:00Z",
+   "want": {
+    "action": "delete",
+    "reason": "passed"
+   }
+  },
+  {
+   "name": "travel (B-2): in Tokyo the same record rings at 12:00 Tokyo time on the Tokyo day of greatest eclipse, 7 February",
+   "record": {
+    "v": 1,
+    "id": "0123456789abcdef0123456789abcdef",
+    "eclipseId": "2027-02-06-solar",
+    "spec": {
+     "kind": "day",
+     "daysBefore": 0,
+     "time": "12:00"
+    }
+   },
+   "eclipse": {
+    "id": "2027-02-06-solar",
+    "greatest": "2027-02-06T15:59:32Z"
+   },
+   "zone": "Asia/Tokyo",
+   "now": "2027-02-06T00:00:00Z",
+   "want": {
+    "action": "arm",
+    "fireAt": "2027-02-07T03:00:00Z"
+   }
+  },
+  {
+   "name": "more than 24 hours after greatest eclipse and still to ring: the clocks go back that day, so 23:59 is 24 hours 29 minutes after it; armed",
+   "record": {
+    "v": 1,
+    "id": "0123456789abcdef0123456789abcdef",
+    "eclipseId": "2033-10-29-lunar",
+    "spec": {
+     "kind": "day",
+     "daysBefore": 0,
+     "time": "23:59"
+    }
+   },
+   "eclipse": {
+    "id": "2033-10-29-lunar",
+    "greatest": "2033-10-29T22:30:00Z"
+   },
+   "zone": "Europe/Oslo",
+   "now": "2033-10-30T22:40:00Z",
+   "want": {
+    "action": "arm",
+    "fireAt": "2033-10-30T22:59:00Z"
+   }
+  },
+  {
+   "name": "48 hours after greatest eclipse every record is deleted, without working out a time",
+   "record": {
+    "v": 1,
+    "id": "0123456789abcdef0123456789abcdef",
+    "eclipseId": "2027-02-06-solar",
+    "spec": {
+     "kind": "before",
+     "minutes": 15
+    }
+   },
+   "eclipse": {
+    "id": "2027-02-06-solar",
+    "greatest": "2027-02-06T15:59:32Z"
+   },
+   "zone": "Europe/Oslo",
+   "now": "2027-02-08T16:00:00Z",
+   "want": {
+    "action": "delete",
+    "reason": "expired"
+   }
+  },
+  {
+   "name": "a record whose eclipse is not in the list is deleted",
+   "record": {
+    "v": 1,
+    "id": "0123456789abcdef0123456789abcdef",
+    "eclipseId": "2027-02-07-solar",
+    "spec": {
+     "kind": "before",
+     "minutes": 15
+    }
+   },
+   "eclipse": null,
+   "zone": "Europe/Oslo",
+   "now": "2026-10-16T12:00:00Z",
+   "want": {
+    "action": "delete",
+    "reason": "unknown-eclipse"
+   }
+  },
+  {
+   "name": "a record with a key this version does not know (the old on/off flag) is invalid and deleted",
+   "record": {
+    "v": 1,
+    "id": "0123456789abcdef0123456789abcdef",
+    "eclipseId": "2027-02-06-solar",
+    "spec": {
+     "kind": "before",
+     "minutes": 15
+    },
+    "enabled": true
+   },
+   "eclipse": {
+    "id": "2027-02-06-solar",
+    "greatest": "2027-02-06T15:59:32Z"
+   },
+   "zone": "Europe/Oslo",
+   "now": "2026-10-16T12:00:00Z",
+   "want": {
+    "action": "delete",
+    "reason": "invalid"
+   }
+  },
+  {
+   "name": "a record with an option this version does not offer is invalid and deleted",
+   "record": {
+    "v": 1,
+    "id": "0123456789abcdef0123456789abcdef",
+    "eclipseId": "2027-02-06-solar",
+    "spec": {
+     "kind": "before",
+     "minutes": 45
+    }
+   },
+   "eclipse": {
+    "id": "2027-02-06-solar",
+    "greatest": "2027-02-06T15:59:32Z"
+   },
+   "zone": "Europe/Oslo",
+   "now": "2026-10-16T12:00:00Z",
+   "want": {
+    "action": "delete",
+    "reason": "invalid"
+   }
+  }
+ ]
+}

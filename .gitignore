@@ -1,0 +1,2 @@
+# TypeScript compiler, installed by tools/build-ts.sh from package-lock.json. Never published.
+node_modules/

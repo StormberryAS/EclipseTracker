@@ -1,0 +1,15 @@
+# GitHub's language bar counts what people write, not what a tool generates. These files are
+# generated, so they are marked as such and left out of the statistics (and their diffs are
+# collapsed by default on GitHub).
+#
+# app.js and core/*.js are compiled from ts/ by tools/build-ts.sh; edit the TypeScript.
+/app.js linguist-generated=true
+/core/*.js linguist-generated=true
+# ts/core/data.ts and data/eclipses.json are written by tools/build-eclipse-data.py from the
+# archived NASA pages in tools/nasa/, which are vendored and kept byte for byte as fetched.
+/ts/core/data.ts linguist-generated=true
+/data/eclipses.json linguist-generated=true
+/tools/nasa/** linguist-vendored=true
+# The test vectors for stage B's Kotlin port, written by tools/vectors/build-vectors.py.
+/tests/record-vectors.json linguist-generated=true
+/tests/dst-vectors.json linguist-generated=true

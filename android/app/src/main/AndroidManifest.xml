@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      THE PERMISSIONS: only what a ringing alarm needs (spec 9.1, SunApp's inventory with MoonApp's
+      audit fixes), nine, all install-time. android/expected-permissions.txt is the machine's copy
+      of this list; the Gradle task check<Variant>MergedManifest fails on any permission the merged
+      manifest asks for that it does not list, and on any it lists that has gone.
+
+      USE_EXACT_ALARM
+          Rings at the minute set, on Android 13 and later; granted at install to an app whose
+          purpose includes an alarm clock.
+      SCHEDULE_EXACT_ALARM (maxSdkVersion 32)
+          The same on Android 12 and 12L, where USE_EXACT_ALARM does not exist yet. There the
+          person can switch it off; the app then arms an inexact alarm and says so.
+      POST_NOTIFICATIONS
+          The alarm rings through a notification; asked for when the first ringing alarm is set,
+          never at first start.
+      RECEIVE_BOOT_COMPLETED
+          A restart erases every pending alarm; SystemEventReceiver re-arms them, also before the
+          first unlock (LOCKED_BOOT_COMPLETED), from device-protected storage.
+      WAKE_LOCK
+          Keeps the processor awake between the alarm landing and the ringing service's tone.
+      VIBRATE
+          Vibrates while ringing.
+      USE_FULL_SCREEN_INTENT
+          Puts the ring screen in front of the lock screen.
+      FOREGROUND_SERVICE and FOREGROUND_SERVICE_SYSTEM_EXEMPTED
+          The tone plays in a foreground service so it is not stopped part-way; systemExempted is
+          the type Android allows to an app that holds the exact-alarm permission (MoonApp's audit
+          fix, spec 9.1), rather than mediaPlayback.
+    -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
+
+    <!--
+      NO INTERNET, and nothing else. There is no INTERNET permission, so the WebView cannot reach
+      the network at all, whatever the page tried; the page's own policy (connect-src 'none')
+      forbids it as well. The removals strip these back out if a dependency ever merges them in.
+      The calendar handover needs no calendar permission (an ACTION_VIEW of the app's own file,
+      spec 9.6, B-3), and Save needs no storage permission (Android's save screen).
+    -->
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" tools:node="remove" />
+
+    <!--
+      androidx.core's private signature permission for its registerReceiver shim: removed, so no
+      code here may call ContextCompat.registerReceiver with RECEIVER_NOT_EXPORTED (SunApp's
+      standing constraint). Every receiver of this app is declared below; none is registered at
+      run time.
+    -->
+    <permission
+        android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        tools:node="remove" />
+    <uses-permission
+        android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        tools:node="remove" />
+
+    <!--
+      NO BACKUP (MoonApp's audit fix). allowBackup="false" disables cloud and adb backup; both rule
+      files exclude everything as well, because device-to-device transfer is not governed by
+      allowBackup. The alarm records live in device-protected storage, which the rules exclude too.
+    -->
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.EclipseTracker">
+
+        <!-- The WebView must not report usage metrics to Google, and has nothing for Safe
+             Browsing to protect: it can load only the bundled page and has no network. -->
+        <meta-data
+            android:name="android.webkit.WebView.MetricsOptOut"
+            android:value="true" />
+        <meta-data
+            android:name="android.webkit.WebView.EnableSafeBrowsing"
+            android:value="false" />
+
+        <!--
+          The page. configChanges keeps the activity, and with it the WebView and an open planner,
+          alive across rotation, resizing, keyboard, dark mode, language, text size and network
+          country changes (GDPRLetterBuilder's list). taskAffinity="" with singleTask, as
+          GDPRLetterBuilder and CheckLink (SEC-8). The only intent filter is the launcher's.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
+            android:configChanges="mcc|mnc|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|locale|layoutDirection|fontWeightAdjustment|grammaticalGender|colorMode|touchscreen"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.EclipseTracker">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          The ring screen (SunApp's, in plain views). Started only by this app's own full-screen
+          intent, so not exported; directBootAware so an alarm armed before a restart rings before
+          the first unlock; over the lock screen with the display turned on (the attributes from
+          API 27, window flags below that, in RingActivity); out of Recents and out of the page's task.
+        -->
+        <activity
+            android:name=".alarm.RingActivity"
+            android:exported="false"
+            android:directBootAware="true"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode|density|fontScale"
+            android:theme="@style/Theme.EclipseTracker"
+            tools:targetApi="27" />
+
+        <!-- The tone, the vibration, the ring notification with its full-screen intent and the
+             ten-minute ring timeout. systemExempted: see the permission list above. -->
+        <service
+            android:name=".alarm.AlarmService"
+            android:exported="false"
+            android:directBootAware="true"
+            android:foregroundServiceType="systemExempted" />
+
+        <!-- The alarm going off, and Snooze and Dismiss from the notification and the ring screen:
+             explicit intents from this app only. -->
+        <receiver
+            android:name=".alarm.AlarmFireReceiver"
+            android:exported="false"
+            android:directBootAware="true" />
+
+        <!--
+          Everything after which what is armed can no longer be trusted (spec 9.4, 9.7): a restart
+          (also before the first unlock), an update, a change of time zone or of the clock, and a
+          change of the exact-alarm permission. Not exported: every one of these broadcasts comes
+          from the system, which reaches a receiver that is not exported (as WorkManager's own
+          rescheduling receiver), so no other app can make this one run.
+        -->
+        <receiver
+            android:name=".alarm.SystemEventReceiver"
+            android:exported="false"
+            android:directBootAware="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          Add to calendar (spec 9.6, B-3): the calendar file the app writes into cache/calendar/ is
+          handed to the calendar app as a content: address with a one-off read grant. The provider is
+          not exported and serves that one folder only (xml/calendar_paths.xml).
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.calendar"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/calendar_paths" />
+        </provider>
+
+        <!-- androidx.profileinstaller's receiver for adb and benchmarking tools, exported behind
+             DUMP: not needed, removed, as in GDPRLetterBuilder. -->
+        <receiver
+            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+            tools:ignore="MissingClass"
+            tools:node="remove" />
+    </application>
+
+</manifest>

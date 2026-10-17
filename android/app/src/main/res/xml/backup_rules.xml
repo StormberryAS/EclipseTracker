@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  API 30 and below, where dataExtractionRules does not exist yet. Excludes everything: `root` is
+  the app's credential-protected data directory, `device_root` the device-protected one where the
+  alarm records live. Redundant on top of allowBackup="false", and that is the point.
+-->
+<full-backup-content>
+    <exclude domain="root" />
+    <exclude domain="device_root" />
+    <exclude domain="external" />
+</full-backup-content>
