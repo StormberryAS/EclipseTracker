@@ -261,7 +261,7 @@ jobs:
           # android-bridge.js is committed: the build job proved it is what android-bridge.ts
           # compiles to, and here the APK's copy must equal that committed file.
           shopt -s globstar nullglob
-          EXPECTED_WEB=$(cd .. && for f in index.html app.js style.css favicon.svg disclaimer.html \
+          EXPECTED_WEB=$(cd .. && for f in index.html app.js style.css favicon.svg apple-touch-icon.png disclaimer.html \
                                          core/*.js data/eclipses.json \
                                          fonts/**/*.css fonts/**/*.woff2 switcher-icons/*.svg; do
                            case "$f" in core/api.js|core/types.js) continue ;; esac

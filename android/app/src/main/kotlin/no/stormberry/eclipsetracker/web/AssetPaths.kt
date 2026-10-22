@@ -21,6 +21,8 @@ object AssetPaths {
         "js" to "text/javascript",
         "css" to "text/css",
         "svg" to "image/svg+xml",
+        // apple-touch-icon.png, the iPhone and iPad Home Screen icon the pages link (2026-10-21).
+        "png" to "image/png",
         "woff2" to "font/woff2",
     )
 

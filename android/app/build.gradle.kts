@@ -262,12 +262,16 @@ object WebAssets {
     //   index.html, app.js, style.css  the page, its module and its style sheet
     //   core/*.js                      the pure modules app.js imports (spec 9.2)
     //   favicon.svg                    the page's icon and the picture beside the title
+    //   apple-touch-icon.png           the iPhone and iPad Home Screen icon (2026-10-21); no
+    //                                  meaning in the app, bundled because index.html and
+    //                                  disclaimer.html link it relatively and the reference
+    //                                  check must find it
     //   disclaimer.html                the footer's Disclaimer, opened over the page in the app
     //   fonts/**/*.css, *.woff2        Inter, self-hosted
     //   switcher-icons/*.svg           the footer carousel, referenced from the site root
     //   data/eclipses.json             the eclipse list for the native alarm engine (spec 9.3)
     val INCLUDES = listOf(
-        "index.html", "app.js", "style.css", "favicon.svg", "disclaimer.html",
+        "index.html", "app.js", "style.css", "favicon.svg", "apple-touch-icon.png", "disclaimer.html",
         "core/*.js",
         "data/eclipses.json",
         "fonts/**/*.css", "fonts/**/*.woff2",
@@ -289,7 +293,7 @@ object WebAssets {
 
     // Every type the copy may hold. json is bundled for the native side only: the asset loader
     // (AssetPaths.TYPES) does not serve it to the page, whose own policy forbids fetching it.
-    val ALLOWED_EXTENSIONS = setOf("html", "js", "css", "svg", "woff2", "json")
+    val ALLOWED_EXTENSIONS = setOf("html", "js", "css", "svg", "png", "woff2", "json")
 
     val JEKYLL_DEFAULT_EXCLUDES = listOf("**/.*", "**/.*/**", "**/_*", "**/_*/**", "**/#*", "**/*~")
 

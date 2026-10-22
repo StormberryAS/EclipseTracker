@@ -87,7 +87,7 @@ const BASE_FONT_PX = Number(group(/const val BASE_FONT_PX = (\d+)/, TEXT_SCALE_K
 const BASE_FIXED_FONT_PX = Number(group(/const val BASE_FIXED_FONT_PX = (\d+)/, TEXT_SCALE_KT));
 const appFontSizes = (scale: number): { standard: number; fixed: number } => ({ standard: Math.round(BASE_FONT_PX * scale), fixed: Math.round(BASE_FIXED_FONT_PX * scale) });
 const BRIDGE_TAG = '<script src="android-bridge.js"></script>';
-const TYPES: Readonly<Record<string, string>> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
+const TYPES: Readonly<Record<string, string>> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2' };
 /** What the app serves: the compiled bridge script. */
 const BRIDGE_SRC = readFileSync(join(ROOT, 'android/web-overlay/android-bridge.js'), 'utf8');
 /** Its TypeScript source, where the words are written. */

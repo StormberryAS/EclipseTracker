@@ -19,6 +19,7 @@ class WebHelpersTest {
         assertEquals("web/core/alarms.js", AssetPaths.resolve("core/alarms.js"))
         assertEquals("web/switcher-icons/eclipse.svg", AssetPaths.resolve("switcher-icons/eclipse.svg"))
         assertEquals("web/disclaimer.html", AssetPaths.resolve("disclaimer.html"))
+        assertEquals("web/apple-touch-icon.png", AssetPaths.resolve("apple-touch-icon.png"))
         assertEquals("web/fonts/inter/InterVariable.woff2", AssetPaths.resolve("fonts/inter/InterVariable.woff2"))
         for (bad in listOf("../AndroidManifest.xml", "core/../../x.js", "./index.html", "/index.html", "core//alarms.js", "a\\b.js",
             ".git/config.js", "core/.hidden.js", "app.js\u0000.css", null)) assertNull(bad, AssetPaths.resolve(bad))
@@ -28,7 +29,9 @@ class WebHelpersTest {
         assertEquals("text/javascript", AssetPaths.mimeType("web/core/alarms.js"))
         assertEquals("font/woff2", AssetPaths.mimeType("web/fonts/inter/Inter-Regular.woff2"))
         assertNull(AssetPaths.encoding("web/fonts/inter/Inter-Regular.woff2"))
-        assertEquals(setOf("html", "js", "css", "svg", "woff2"), AssetPaths.extensions)
+        assertEquals("image/png", AssetPaths.mimeType("web/apple-touch-icon.png"))
+        assertNull(AssetPaths.encoding("web/apple-touch-icon.png"))
+        assertEquals(setOf("html", "js", "css", "svg", "png", "woff2"), AssetPaths.extensions)
     }
 
     @Test fun theHeaderPolicyIsThePagesMetaPolicyPlusTwo() {
