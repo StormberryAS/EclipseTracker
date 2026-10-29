@@ -43,6 +43,76 @@ val releaseKeyPassword = signingValue("keyPassword", "RELEASE_KEY_PASSWORD")
 val canSignRelease = releaseStoreFile != null && file(releaseStoreFile).exists() &&
     releaseStorePassword != null && releaseKeyAlias != null && releaseKeyPassword != null
 
+// THE GOOGLE PLAY EDITION (EclipseTracker 2.0.1, 29 October 2026; MoonApp's and SunApp's pattern of
+// 25 October 2026). Google Play is a SEPARATE package, deliberately: `no.stormberry.eclipsetracker`
+// stays the sovereign build (our key, our certificate, GitHub Releases and Zapstore, with the NIP-C1
+// certificate link vouching for it), and `-PplayBuild=true` builds `no.stormberry.eclipsetracker.play`
+// instead, which Google re-signs with an app signing key it holds. Two package names are two apps to
+// Android: they install side by side and neither can ever update the other, so nothing that happens
+// on Play can reach a Zapstore install.
+//
+// THE PLAY EDITION HAS NO RINGING ALARMS (Marcos, 2026-10-29: "prepare eclipsetracker on play without
+// alarms, it's not a problem that google calendar ignores alarms, it is what it is"). The ringing
+// alarms need USE_EXACT_ALARM, USE_FULL_SCREEN_INTENT and a foreground service of type
+// systemExempted, each a Play review gate of its own (a declaration form, a video, an "up to several
+// weeks" extended review). The Play package keeps the eclipse list, the countdown and the calendar
+// file (Save the calendar file and Add to calendar, which need no permission) and ships with no
+// permission at all. Three switches do it, and there are no product flavours (a flavour-level
+// signingConfig is overridden by the build type's, and a flavour dimension renames every task and
+// breaks the workflow's APK paths and the Zapstore regex):
+//   1. src/play/AndroidManifest.xml, merged over the main manifest, removes the nine alarm
+//      permissions and the four alarm components with tools:node="remove" (PlayManifestTest pins it
+//      against main, so an alarm permission added later cannot reach Play unnoticed);
+//   2. Edition.ALARMS, a compile-time constant (src/play/kotlin or src/sovereign/kotlin), switches off
+//      every alarm hook in MainActivity, and R8 then drops the alarm package it can no longer reach;
+//   3. the bridge script learns the edition from the one line the build injects into index.html
+//      (WebAssets.injectedTag: data-edition="play"), and in the Play edition adds Add to calendar
+//      only: no Set ringing alarms, no overview, no app travel note, no notification request.
+// src/play/res overrides the one in-app sentence of main that speaks of ringing alarms (a toast).
+val playBuild = when (providers.gradleProperty("playBuild").orNull?.lowercase()) {
+    null -> false
+    // A bare `-PplayBuild` arrives as an empty string. Treating that as false would hand back a
+    // sovereign artefact from a command that plainly meant Play.
+    "", "true", "1", "yes" -> true
+    "false", "0", "no" -> false
+    else -> error(
+        "-PplayBuild=${providers.gradleProperty("playBuild").orNull} is not a recognised " +
+            "value. Use -PplayBuild=true, or omit the property for the sovereign build.",
+    )
+}
+
+// The Play upload key is a separate key with a separate job: it proves who uploaded the bundle and
+// never reaches a device, so it must never be the release key. If it is ever compromised it can be
+// reset from the Play Console without touching a single install. keystore.properties (or the
+// PLAY_UPLOAD_* Gradle properties, or the environment) names the file, type and alias; the two
+// passwords come from the keyring and are never written into a file. The key is
+// ~/.android-keys/stormberry-eclipsetracker-play-upload.p12 (created 29 October 2026, certificate
+// SHA-256 a6d1575a...f9a6), its password in the keyring as app=eclipsetracker-play-upload.
+val uploadStoreFile = signingValue("playUploadStoreFile", "PLAY_UPLOAD_STORE_FILE")
+val uploadStoreType = signingValue("playUploadStoreType", "PLAY_UPLOAD_STORE_TYPE")
+val uploadStorePassword = signingValue("playUploadStorePassword", "PLAY_UPLOAD_STORE_PASSWORD")
+val uploadKeyAlias = signingValue("playUploadKeyAlias", "PLAY_UPLOAD_KEY_ALIAS")
+val uploadKeyPassword = signingValue("playUploadKeyPassword", "PLAY_UPLOAD_KEY_PASSWORD")
+val canSignPlayUpload = uploadStoreFile != null && file(uploadStoreFile).exists() &&
+    uploadStorePassword != null && uploadKeyAlias != null && uploadKeyPassword != null
+
+// The two keys must be two different files. A Play upload config pointing at the release keystore
+// (or a byte-for-byte copy of it) would enrol the sovereign certificate in Play App Signing, which
+// cannot be undone. Refused before anything is built.
+if (releaseStoreFile != null && uploadStoreFile != null) {
+    val rel = file(releaseStoreFile)
+    val upl = file(uploadStoreFile)
+    if (rel.exists() && upl.exists() &&
+        (rel.canonicalFile == upl.canonicalFile || rel.readBytes().contentEquals(upl.readBytes()))
+    ) {
+        error(
+            "The Play upload keystore and the release keystore are the same key " +
+                "($uploadStoreFile). The release key signs the Zapstore APK only and must never " +
+                "reach Play; the upload key signs the Play bundle only.",
+        )
+    }
+}
+
 // The release APK is built UNSIGNED, in a job that never sees the key, and signed afterwards
 // with apksigner (GDPRLetterBuilder's SEC-6). That unsigned APK is asked for explicitly with
 // -PunsignedRelease=true; without the switch a release task that would produce an unsigned APK
@@ -68,11 +138,14 @@ val stagingBuild = providers.gradleProperty("stagingBuild").orNull == "true"
 // keystore.properties, a Gradle property or the environment) refuses the staging build outright,
 // whatever the task: the testing APK is the debug one, or the release built with
 // -PunsignedRelease=true (which itself refuses a password in reach).
-if (stagingBuild && (releaseStorePassword != null || releaseKeyPassword != null || canSignRelease)) {
+if (stagingBuild && (releaseStorePassword != null || releaseKeyPassword != null || canSignRelease ||
+        uploadStorePassword != null || uploadKeyPassword != null)
+) {
     error(
         "-PstagingBuild=true is for testing builds only and must never be signed, but signing " +
-            "passwords are set. Unset RELEASE_STORE_PASSWORD and RELEASE_KEY_PASSWORD (and any " +
-            "password in keystore.properties), or build from the web commit without the switch.",
+            "passwords are set. Unset RELEASE_STORE_PASSWORD and RELEASE_KEY_PASSWORD (and the " +
+            "PLAY_UPLOAD_* passwords, and any password in keystore.properties), or build from the " +
+            "web commit without the switch.",
     )
 }
 
@@ -89,21 +162,60 @@ if (configurationCacheRequested && (releaseStorePassword != null || releaseKeyPa
             "--no-configuration-cache; otherwise Gradle would store them in its configuration cache.",
     )
 }
+// The same for the Play upload passwords (MoonApp's guard): refused before any cache entry exists.
+if (configurationCacheRequested && (uploadStorePassword != null || uploadKeyPassword != null)) {
+    error(
+        "A Play upload password is set, so this build must run with --no-configuration-cache; " +
+            "otherwise Gradle would store it in its configuration cache.",
+    )
+}
 
 // Guards on the RESOLVED TASK GRAPH, not on the command line (GDPRLetterBuilder's reasons):
-// EclipseTracker ships APKs only (Zapstore first), so a release bundle is refused outright, and
-// a release task that would silently produce an unsigned APK is refused unless asked for.
+// `build`, `assemble` and Gradle's `bR` abbreviation reach a release artefact without containing
+// "bundleRelease" or "assembleRelease". packageRelease (APK) and signReleaseBundle (AAB) are the two
+// tasks that consume a signing config, so the checks belong on them.
+//   - A release BUNDLE is built only with -PplayBuild=true and a complete upload key. Without the
+//     flag it would carry the SOVEREIGN application ID signed with the release key; uploading it
+//     would permanently claim no.stormberry.eclipsetracker on Play and enrol the release certificate
+//     in Play App Signing, which cannot be undone.
+//   - A release APK with -PplayBuild=true is refused: Play takes the bundle, and an installable .play
+//     APK has no destination and must never be mistaken for the Zapstore one.
+//   - The sovereign release APK that would silently come out unsigned is refused unless asked for.
 tasks.matching { it.name == "packageRelease" || it.name == "signReleaseBundle" }.configureEach {
     val isBundle = name == "signReleaseBundle"
     val signed = canSignRelease
     val unsigned = unsignedRelease
+    val play = playBuild
+    val haveUploadKey = canSignPlayUpload
     inputs.property("unsignedRelease", unsigned)
+    inputs.property("playBuild", play)
     doFirst {
-        if (isBundle) {
+        if (isBundle && !play) {
             error(
-                "Refusing to build a release bundle. EclipseTracker ships APKs only (Zapstore " +
-                    "first); a bundle signed with the release key must never exist.",
+                "Refusing to build a release bundle without -PplayBuild=true. This AAB would carry " +
+                    "the sovereign application ID signed with the release key, and uploading it " +
+                    "would permanently claim that package on Play. The sovereign channel ships " +
+                    "APKs; Play takes the bundle, with -PplayBuild=true.",
             )
+        }
+        if (!isBundle && play) {
+            error(
+                "Refusing to build a release APK with -PplayBuild=true. Play takes the app bundle: " +
+                    "run :app:bundleRelease -PplayBuild=true. An installable .play APK has no " +
+                    "destination and must never be mistaken for the Zapstore one.",
+            )
+        }
+        if (isBundle) {
+            if (!haveUploadKey) {
+                error(
+                    "playBuild=true but the Play upload keystore is not fully configured. " +
+                        "playUploadStoreFile and playUploadKeyAlias (android/keystore.properties, or " +
+                        "PLAY_UPLOAD_STORE_FILE and PLAY_UPLOAD_KEY_ALIAS) and the passwords " +
+                        "PLAY_UPLOAD_STORE_PASSWORD and PLAY_UPLOAD_KEY_PASSWORD (from the keyring) " +
+                        "must all be set, and the store file must exist.",
+                )
+            }
+            return@doFirst
         }
         if (!signed && !unsigned) {
             error(
@@ -116,6 +228,17 @@ tasks.matching { it.name == "packageRelease" || it.name == "signReleaseBundle" }
     }
 }
 
+// The Play versionCode offset (see defaultConfig): 1,000,000 for EclipseTracker, whose sovereign codes
+// are major * 10000 + minor * 100 + patch.
+val PLAY_VERSION_CODE_OFFSET = 1_000_000
+
+// Under -PplayBuild=true the artefact is named for what it is, so a Play bundle can never be mistaken
+// for a sovereign one on disk. Deliberately NOT set for the sovereign build, whose file name
+// app-release-unsigned.apk is hardcoded in .github/workflows/android-release.yml.
+if (playBuild) {
+    base { archivesName = "eclipsetracker-play" }
+}
+
 android {
     namespace = "no.stormberry.eclipsetracker"
     // compileSdk 37.1 because androidx core-ktx 1.19.0 requires compiling against API 37 or
@@ -124,15 +247,37 @@ android {
     compileSdkMinor = 1
 
     defaultConfig {
-        // Permanent from the first Zapstore release.
-        applicationId = "no.stormberry.eclipsetracker"
+        // Sovereign build: no.stormberry.eclipsetracker, permanent from the first Zapstore release.
+        // Google Play build (-PplayBuild=true): no.stormberry.eclipsetracker.play.
+        applicationId = if (playBuild) "no.stormberry.eclipsetracker.play" else "no.stormberry.eclipsetracker"
         minSdk = 24
         targetSdk = 36
         // 2.0.0 (code 20000): the first Android build (stage B, 16 October 2026), with the
         // website's version (2.0, VER-1). Codes follow major * 10000 + minor * 100 + patch, so
         // 2.0.1 is 20001 and 2.1.0 is 20100. First released on Zapstore as 2.0.0.
-        versionCode = 20000
-        versionName = "2.0.0"
+        //
+        // 2.0.1 (code 20001), 29 October 2026: the Google Play switch (see playBuild above). The
+        // sovereign APK keeps every permission, component and screen it had; Edition.ALARMS is true
+        // in it. See fastlane changelogs/20001.txt.
+        //
+        // ONE VISIBLE VERSION, TWO CODE LINES. The sovereign versionCode and versionName on the next
+        // lines are the only numbers bumped by hand. The Play build derives its code from them and
+        // shows the same name:
+        //   Play versionCode = 1,000,000 + sovereign versionCode   (2.0.1 code 20001 -> code 1020001)
+        //   Play versionName = sovereign versionName               (2.0.1 -> 2.0.1)
+        // EclipseTracker's offset is 1,000,000, not the 1000 of MoonApp, SunApp and CheckLink: its
+        // sovereign codes are major * 10000 + minor * 100 + patch, so 1000 + 20001 = 21001 would be
+        // the code of a future sovereign 2.10.1 and the two lines would read alike. A million keeps
+        // every Play code above every sovereign code this scheme can write (up to 99.99.99), still
+        // rising with it and far below Play's limit of 2,100,000,000. Play needs monotonic codes
+        // within its own package only; the package name and the signing key are what keep the two
+        // apart, not the version. Every Play upload is built from a sovereign release tag that
+        // shipped on GitHub Releases, never from an untagged tree (the table is in README.md).
+        versionCode = 20001
+        versionName = "2.0.1"
+        if (playBuild) {
+            versionCode = PLAY_VERSION_CODE_OFFSET + versionCode!!
+        }
 
         // Density PNGs generated from vectors are a source of build nondeterminism, and the
         // app ships vector icons only.
@@ -153,6 +298,22 @@ android {
                 enableV4Signing = false
             }
         }
+        if (canSignPlayUpload) {
+            create("playUpload") {
+                storeFile = file(uploadStoreFile!!)
+                if (uploadStoreType != null) storeType = uploadStoreType
+                storePassword = uploadStorePassword
+                keyAlias = uploadKeyAlias
+                keyPassword = uploadKeyPassword
+                // v1 stays ON here, unlike the release config above (MoonApp's reason). An app bundle
+                // is signed like a JAR, and this signature exists only so Play can verify who
+                // uploaded it: Play strips it and re-signs the split APKs it generates with the app
+                // signing key it holds.
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
     }
 
     buildTypes {
@@ -163,7 +324,14 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            if (canSignRelease && !unsignedRelease) signingConfig = signingConfigs.getByName("release")
+            // The Play build never touches the release key and the sovereign build never touches
+            // the upload key. Both stay conditional so a clean checkout with no keystore can still
+            // run assembleDebug and an unsigned assembleRelease.
+            if (playBuild) {
+                if (canSignPlayUpload) signingConfig = signingConfigs.getByName("playUpload")
+            } else if (canSignRelease && !unsignedRelease) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             vcsInfo {
                 include = false
             }
@@ -178,6 +346,22 @@ android {
         buildConfig = false
         resValues = false
         shaders = false
+    }
+
+    // The edition (see playBuild above). Edition.kt is compiled with the main source set from
+    // src/sovereign/kotlin or src/play/kotlin; the tiny file in each is the only source that
+    // differs. The Play edition also overlays a manifest that REMOVES the alarm permissions and
+    // components, and src/play/res, whose one string replaces main's toast that speaks of ringing
+    // alarms (a build type's sources win over main's). Both are set on both build types so that a
+    // Play debug build shows the same manifest and words as the bundle; the release APK with the
+    // flag is refused by the guard above, so the bundle is the only Play artefact. The sovereign
+    // build adds no manifest and no resource, so its merged manifest and resources are main's.
+    sourceSets["main"].kotlin.directories.add(if (playBuild) "src/play/kotlin" else "src/sovereign/kotlin")
+    if (playBuild) {
+        for (type in listOf("release", "debug")) {
+            sourceSets[type].manifest.srcFile("src/play/AndroidManifest.xml")
+            sourceSets[type].res.directories.add("src/play/res")
+        }
     }
 
     compileOptions {
@@ -223,6 +407,13 @@ android {
             // targetSdk 36 is intentional; compileSdk is already 37.1.
             "OldTargetApi",
         )
+        // The Play edition removes POST_NOTIFICATIONS from its manifest and, with it, every
+        // notification the alarms post. Lint reads the SOURCE, where AlarmService still posts one,
+        // and cannot see that Edition.ALARMS (false there) makes that code unreachable and that R8
+        // deletes it (SunApp's finding). The check stays ON for the sovereign build, which declares
+        // the permission, and the kit's check-play-bundle.sh proves that the Play bundle holds no
+        // alarm class at all.
+        if (playBuild) disable += "NotificationPermission"
     }
 
     testOptions {
@@ -257,7 +448,14 @@ kotlin {
 
 object WebAssets {
     const val INJECTED_TAG = "<script src=\"android-bridge.js\"></script>"
+    // The Google Play edition's line (29 October 2026): the same script, told the edition by the tag
+    // that loads it (android-bridge.ts reads document.currentScript's data-edition), so one bridge
+    // script serves both editions and the Play one adds nothing about ringing alarms. The sovereign
+    // line is unchanged, so the sovereign APK's index.html is byte for byte what 2.0.0 bundled.
+    const val PLAY_INJECTED_TAG = "<script src=\"android-bridge.js\" data-edition=\"play\"></script>"
     const val BRIDGE_FILE = "android-bridge.js"
+
+    fun injectedTag(play: Boolean): String = if (play) PLAY_INJECTED_TAG else INJECTED_TAG
 
     //   index.html, app.js, style.css  the page, its module and its style sheet
     //   core/*.js                      the pure modules app.js imports (spec 9.2)
@@ -302,7 +500,7 @@ object WebAssets {
     // the package files, the documents and the website's own files.
     val APK_EXCLUDES = listOf(
         "android/**", "fastlane/**", "tests/**", "tools/**", "ts/**", ".github/**",
-        "zapstore.yaml", "README*", "DISCLAIMER.md", "LICENSE", "NOTICE", "CNAME", "robots.txt",
+        "zapstore.yaml", "README*", "CHANGELOG.md", "DISCLAIMER.md", "LICENSE", "NOTICE", "CNAME", "robots.txt",
         "_config.yml", "bump_assets.py", "package.json", "package-lock.json", "tsconfig.json",
         "tsconfig.core.json", "node_modules/**",
         "**/__pycache__/**", "**/*.pyc", "**/*.bak*", "**/.DS_Store", "**/*sync-conflict*",
@@ -376,14 +574,17 @@ object WebAssets {
         return false
     }
 
-    fun removeInjected(text: String): Result<String> {
-        val count = Regex(Regex.escape(INJECTED_TAG)).findAll(text).count()
+    fun removeInjected(text: String, tag: String): Result<String> {
+        val count = Regex(Regex.escape(tag)).findAll(text).count()
         if (count != 1) return Result.failure(IllegalStateException("expected the bridge tag exactly once, found $count"))
-        val at = text.indexOf(INJECTED_TAG)
+        if (Regex(Regex.escape(BRIDGE_FILE)).findAll(text).count() != 1) {
+            return Result.failure(IllegalStateException("$BRIDGE_FILE is named outside the one injected tag"))
+        }
+        val at = text.indexOf(tag)
         val lineStart = text.lastIndexOf('\n', at) + 1
         val lineEnd = text.indexOf('\n', at)
         if (lineEnd < 0 || text.substring(lineStart, at).isNotBlank() ||
-            text.substring(at + INJECTED_TAG.length, lineEnd).isNotEmpty()
+            text.substring(at + tag.length, lineEnd).isNotEmpty()
         ) {
             return Result.failure(IllegalStateException("the bridge tag is not alone on its own line"))
         }
@@ -391,14 +592,14 @@ object WebAssets {
     }
 
     /** Inserts the bridge tag on its own line directly before the first script tag. */
-    fun inject(source: String): String {
+    fun inject(source: String, tag: String): String {
         val first = source.indexOf("<script")
         require(first >= 0) { "index.html has no <script> tag to inject the Android bridge before" }
         require(!source.contains(BRIDGE_FILE)) { "index.html already mentions $BRIDGE_FILE" }
         val lineStart = source.lastIndexOf('\n', first) + 1
         val indent = source.substring(lineStart, first)
         require(indent.isBlank()) { "the first <script> in index.html does not start its own line" }
-        return source.substring(0, lineStart) + indent + INJECTED_TAG + "\n" + source.substring(lineStart)
+        return source.substring(0, lineStart) + indent + tag + "\n" + source.substring(lineStart)
     }
 
     private val HTML_REF = Regex("""(?:src|href)\s*=\s*"([^"]*)"""")
@@ -561,6 +762,10 @@ abstract class PrepareWebAssets : DefaultTask() {
     @get:Internal
     abstract val overlayRoot: DirectoryProperty
 
+    /** True for the Google Play edition: the injected line tells the bridge so (WebAssets.injectedTag). */
+    @get:Input
+    abstract val playEdition: Property<Boolean>
+
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 }
@@ -572,6 +777,7 @@ val prepareWebAssets = tasks.register<PrepareWebAssets>("prepareWebAssets") {
     overlay.from(webOverlayDir)
     webRoot.set(webRootDir)
     overlayRoot.set(webOverlayDir)
+    playEdition.set(playBuild)
     outputDir.set(webAssetsOutDir)
     dependsOn(checkWebSourcesTracked)
     doLast {
@@ -590,7 +796,7 @@ val prepareWebAssets = tasks.register<PrepareWebAssets>("prepareWebAssets") {
             val dest = out.resolve(rel)
             dest.parentFile.mkdirs()
             if (rel == "index.html") {
-                dest.writeText(WebAssets.inject(src.readText()))
+                dest.writeText(WebAssets.inject(src.readText(), WebAssets.injectedTag(playEdition.get())))
             } else {
                 src.copyTo(dest, overwrite = false)
             }
@@ -653,6 +859,10 @@ abstract class VerifyWebAssets : DefaultTask() {
     @get:PathSensitive(PathSensitivity.NONE)
     abstract val responseHeaders: RegularFileProperty
 
+    /** True for the Google Play edition, whose injected line carries data-edition="play". */
+    @get:Input
+    abstract val playEdition: Property<Boolean>
+
     @get:OutputFile
     abstract val report: RegularFileProperty
 }
@@ -694,8 +904,10 @@ val verifyWebAssets = tasks.register<VerifyWebAssets>("verifyWebAssets") {
     bridgeSource.set(webOverlayDir.resolve(WebAssets.BRIDGE_FILE))
     copied.set(prepareWebAssets.flatMap { it.outputDir })
     responseHeaders.set(file("src/main/kotlin/no/stormberry/eclipsetracker/web/ResponseHeaders.kt"))
+    playEdition.set(playBuild)
     report.set(layout.buildDirectory.file("reports/webAssets/verify.txt"))
     doLast {
+        val tag = WebAssets.injectedTag(playEdition.get())
         val root = webRoot.get().asFile
         val web = copied.get().asFile.resolve("web")
         val problems = mutableListOf<String>()
@@ -721,11 +933,11 @@ val verifyWebAssets = tasks.register<VerifyWebAssets>("verifyWebAssets") {
             if (rel == "index.html") {
                 val s = src.readBytes()
                 val text = String(dst.readBytes(), Charsets.UTF_8)
-                val restored = WebAssets.removeInjected(text).getOrElse {
+                val restored = WebAssets.removeInjected(text, tag).getOrElse {
                     problems += "index.html: ${it.message}"
                     continue
                 }
-                val at = text.indexOf(WebAssets.INJECTED_TAG)
+                val at = text.indexOf(tag)
                 if (!restored.toByteArray(Charsets.UTF_8).contentEquals(s)) {
                     problems += "index.html: differs from its source by more than the injected line"
                 }
@@ -733,7 +945,7 @@ val verifyWebAssets = tasks.register<VerifyWebAssets>("verifyWebAssets") {
                 // when app.js starts (spec 9.1, B-4).
                 val module = text.indexOf("type=\"module\"")
                 if (module < 0 || at > module) problems += "index.html: the bridge must load before the app module"
-                lines.append("MODIFIED  ").append(rel).append(" (one injected line, otherwise identical)\n")
+                lines.append("MODIFIED  ").append(rel).append(" (one injected line, otherwise identical: ").append(tag).append(")\n")
             } else if (!src.readBytes().contentEquals(dst.readBytes())) {
                 problems += "$rel: bytes differ from the source"
             } else {
@@ -782,6 +994,9 @@ abstract class VerifyWebAssetsCommitted : DefaultTask() {
 
     @get:Input
     abstract val staging: Property<Boolean>
+
+    @get:Input
+    abstract val playEdition: Property<Boolean>
 }
 
 val verifyWebAssetsCommitted = tasks.register<VerifyWebAssetsCommitted>("verifyWebAssetsCommitted") {
@@ -790,8 +1005,10 @@ val verifyWebAssetsCommitted = tasks.register<VerifyWebAssetsCommitted>("verifyW
     copied.set(prepareWebAssets.flatMap { it.outputDir })
     webRoot.set(webRootDir)
     staging.set(stagingBuild)
+    playEdition.set(playBuild)
     doLast {
         val root = webRoot.get().asFile
+        val tag = WebAssets.injectedTag(playEdition.get())
         if (staging.get() && WebAssets.onCi()) error("-PstagingBuild=true is for local staging builds only, never on CI.")
         if (!WebAssets.inGitRepository(root)) {
             if (WebAssets.onCi()) error("The web root is not a git checkout, so a release cannot be checked against a commit.")
@@ -810,7 +1027,7 @@ val verifyWebAssetsCommitted = tasks.register<VerifyWebAssetsCommitted>("verifyW
                 return@forEach
             }
             val bundled = if (rel == "index.html") {
-                WebAssets.removeInjected(String(f.readBytes(), Charsets.UTF_8)).getOrElse {
+                WebAssets.removeInjected(String(f.readBytes(), Charsets.UTF_8), tag).getOrElse {
                     problems += "index.html: ${it.message}"
                     return@forEach
                 }.toByteArray(Charsets.UTF_8)
@@ -923,6 +1140,10 @@ abstract class CheckMergedManifest : DefaultTask() {
     @get:PathSensitive(PathSensitivity.NONE)
     abstract val expected: RegularFileProperty
 
+    /** The Google Play edition: no permission at all and no alarm component, instead of the nine. */
+    @get:Input
+    abstract val playEdition: Property<Boolean>
+
     @get:OutputFile
     abstract val report: RegularFileProperty
 }
@@ -958,6 +1179,23 @@ object ManifestRules {
         }
         return out
     }
+
+    /**
+     * The Google Play edition's extra rules (29 October 2026): no component of the alarm package and
+     * no activity but MainActivity. Its permissions are checked by [problems] against an empty list.
+     */
+    fun alarmFreeProblems(xml: String): List<String> {
+        val body = xml.replace(Regex("<!--[\\s\\S]*?-->"), "")
+        val out = mutableListOf<String>()
+        Regex("<(activity|activity-alias|service|receiver|provider)\\b[^>]*>").findAll(body).forEach { m ->
+            val name = Regex("android:name=\"([^\"]+)\"").find(m.value)?.groupValues?.get(1) ?: "(no name)"
+            if (name.contains(".alarm.")) out += "the Play edition's merged manifest keeps an alarm component: $name"
+            if (m.groupValues[1].startsWith("activity") && name != "no.stormberry.eclipsetracker.MainActivity") {
+                out += "the Play edition's merged manifest has an activity other than MainActivity: $name"
+            }
+        }
+        return out
+    }
 }
 
 androidComponents {
@@ -968,13 +1206,22 @@ androidComponents {
             group = "verification"
             manifest.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST))
             expected.set(rootProject.file("expected-permissions.txt"))
+            playEdition.set(playBuild)
             report.set(layout.buildDirectory.file("reports/manifest/${variant.name}.txt"))
             doLast {
-                val want = ManifestRules.expectedPermissions(expected.get().asFile.readText())
-                require(want.isNotEmpty()) { "expected-permissions.txt lists no permission; has its format changed?" }
-                val problems = ManifestRules.problems(manifest.get().asFile.readText(), want)
+                val listed = ManifestRules.expectedPermissions(expected.get().asFile.readText())
+                require(listed.isNotEmpty()) { "expected-permissions.txt lists no permission; has its format changed?" }
+                // The Google Play edition asks for no permission at all (src/play/AndroidManifest.xml).
+                val play = playEdition.get()
+                val want: Set<String> = if (play) emptySet() else listed
+                val xml = manifest.get().asFile.readText()
+                val problems = ManifestRules.problems(xml, want) + (if (play) ManifestRules.alarmFreeProblems(xml) else emptyList())
                 if (problems.isNotEmpty()) error("The ${manifest.get().asFile.name} of this variant breaks the permission and launcher-only rules:\n  " + problems.joinToString("\n  "))
-                val line = "exactly the ${want.size} expected permissions; allowBackup false; only MainActivity exported"
+                val line = if (play) {
+                    "Google Play edition: no permission at all; no alarm component; MainActivity the only activity; allowBackup false; only MainActivity exported"
+                } else {
+                    "exactly the ${want.size} expected permissions; allowBackup false; only MainActivity exported"
+                }
                 report.get().asFile.writeText(line + "\n" + want.joinToString("\n") + "\n")
                 logger.lifecycle("check${cap}MergedManifest: $line")
             }
@@ -1012,6 +1259,10 @@ tasks.withType<Test>().configureEach {
         File(webRootDir, "tests/alarm-vectors.json"), File(webRootDir, "tests/record-vectors.json"),
         File(webRootDir, "tests/dst-vectors.json"), File(webRootDir, "tests/goldens/eclipse-2027-02-06-solar.ics"),
         File(webRootDir, "data/eclipses.json"), File(webRootDir, "index.html"),
+        // The edition tests (PlayManifestTest, EditionTest) read these sources (29 October 2026).
+        file("src/main/AndroidManifest.xml"), file("src/play"), file("src/sovereign"), file("build.gradle.kts"),
+        file("src/main/res/values/strings.xml"), file("src/main/kotlin/no/stormberry/eclipsetracker/MainActivity.kt"),
+        rootProject.file("expected-permissions.txt"), rootProject.file("web-overlay/android-bridge.js"),
     ).withPathSensitivity(PathSensitivity.RELATIVE)
 }
 

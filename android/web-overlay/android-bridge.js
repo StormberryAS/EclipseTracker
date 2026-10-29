@@ -8,11 +8,14 @@
     if (!bridge || typeof bridge.postMessage !== 'function')
         return;
     const channel = bridge;
+    const loader = document.currentScript;
+    const PLAY = loader instanceof HTMLScriptElement && loader.dataset['edition'] === 'play';
     const T = {
         SET: 'Set ringing alarms',
         ADD: 'Add to calendar',
         TRAVEL: "Ringing alarms follow your phone's time zone: if you travel, a 12.00 alarm rings at 12.00 where you are. Alarms before greatest eclipse always follow the eclipse.",
         KEEPS: 'EclipseTracker sends nothing; the ringing alarms you set are kept on this phone only.',
+        PLAY_KEEPS: 'EclipseTracker sends nothing; it keeps only the last file you added to your calendar, until the app next starts afresh.',
         SET_ONE: '1 ringing alarm set.',
         SET_MANY: '{n} ringing alarms set.',
         SET_NONE: 'No ringing alarm is set for this eclipse.',
@@ -95,9 +98,12 @@
             return state.records;
         });
     }
+    const travel = PLAY ? {} : { travelNote: T.TRAVEL };
     window.EclipseTrackerApp = Object.freeze({
-        travelNote: T.TRAVEL,
+        ...travel,
         rowsFor: function (eclipseId) {
+            if (PLAY)
+                return Promise.resolve([]);
             return listAlarms().then(function (records) { return page ? page.core.rowsFromRecords(records, eclipseId) : []; });
         },
         saveFile: function (name, text) {
@@ -113,6 +119,8 @@
             page = p;
             lastZone = page.zone();
             setUpPlanner();
+            if (PLAY)
+                return;
             setUpOverview();
             listAlarms();
         }
@@ -130,18 +138,27 @@
     }
     function setUpPlanner() {
         const save = document.getElementById('save-ics');
-        if (!save || document.getElementById('app-set'))
+        if (!save || document.getElementById('app-set') || document.getElementById('app-calendar'))
             return;
-        const set = touchSize(button('app-set', 'btn btn-primary', T.SET));
         const add = touchSize(button('app-calendar', 'btn btn-secondary', T.ADD));
+        if (PLAY) {
+            save.insertAdjacentElement('afterend', add);
+            add.addEventListener('click', addToCalendar);
+            replaceKeeps(T.PLAY_KEEPS);
+            return;
+        }
+        const set = touchSize(button('app-set', 'btn btn-primary', T.SET));
         save.className = save.className.replace('btn-primary', 'btn-secondary');
         save.insertAdjacentElement('beforebegin', set);
         save.insertAdjacentElement('afterend', add);
         set.addEventListener('click', setRinging);
         add.addEventListener('click', addToCalendar);
+        replaceKeeps(T.KEEPS);
+    }
+    function replaceKeeps(words) {
         const note = document.querySelector('.planner-note');
         if (note && note.textContent !== null && note.textContent.indexOf(WEB_KEEPS) >= 0)
-            note.textContent = note.textContent.replace(WEB_KEEPS, T.KEEPS);
+            note.textContent = note.textContent.replace(WEB_KEEPS, words);
     }
     function setRinging() {
         const pg = page;
@@ -343,9 +360,11 @@
         lastZone = zone;
         render();
     }
-    window.setInterval(refresh, 60000);
-    document.addEventListener('visibilitychange', function () { if (!document.hidden)
-        window.setTimeout(refresh, 1200); });
+    if (!PLAY) {
+        window.setInterval(refresh, 60000);
+        document.addEventListener('visibilitychange', function () { if (!document.hidden)
+            window.setTimeout(refresh, 1200); });
+    }
     function onBack(q) {
         const dialog = document.getElementById('planner');
         let handled = false;
@@ -379,7 +398,7 @@
                 return;
             }
         }
-        if (msg.type === 'alarms' && msg.id === undefined)
+        if (msg.type === 'alarms' && msg.id === undefined && !PLAY)
             takeAlarms(msg);
     });
     post({ type: 'hello' });

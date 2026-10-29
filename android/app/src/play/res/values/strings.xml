@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- THE GOOGLE PLAY EDITION'S WORDS, merged over src/main/res/values/strings.xml under
+         -PplayBuild=true only (app/build.gradle.kts adds this folder to the release and debug build
+         types, which win over main). The Play edition has no ringing alarms, so the one sentence of
+         main that a Play user can see and that speaks of them is replaced here; the sovereign build
+         never reads this file. Awaiting Marcos's approval (2026-10-29). Same rules as main: British
+         English, no dashes, no exclamation marks, toasts at 66 characters or fewer. -->
+    <string name="page_reloaded">The app stopped and reloaded.</string>
+</resources>

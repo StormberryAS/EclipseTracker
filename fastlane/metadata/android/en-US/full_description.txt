@@ -20,7 +20,7 @@ It asks for nine permissions, all for the ringing alarms:
 - RECEIVE_BOOT_COMPLETED: to set your alarms again after the phone restarts.
 The list, the countdown and the calendar file need none of them. Check for yourself before installing:
 
-    aapt dump permissions eclipsetracker-v2.0.0.apk
+    aapt dump permissions <the APK you downloaded>
 
 The app runs the same page as eclipse.stormberry.as from inside the APK, offline. The build checks that every bundled file is byte for byte the one in the source repository, apart from one added line for the bridge to Android. The alarm times on the phone are worked out by a Kotlin port of the website's planner, tested against the same test cases.
 

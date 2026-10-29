@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      THE GOOGLE PLAY EDITION HAS NO RINGING ALARMS.
+
+      This file is merged OVER src/main/AndroidManifest.xml, and only under -PplayBuild=true
+      (app/build.gradle.kts attaches it to the release and debug build types). Every line below is
+      a removal. Nothing is declared here, so the sovereign manifest stays the single place where
+      EclipseTracker's permissions and components are written down.
+
+      Why: the ringing alarms need USE_EXACT_ALARM, USE_FULL_SCREEN_INTENT and a foreground service
+      of type systemExempted. Each of those is a Play review gate of its own (a restricted-permission
+      form with a video, an App content declaration, a foreground-service declaration with a second
+      video), and the first is documented as an "up to several weeks" extended review. Marcos,
+      2026-10-29: "prepare eclipsetracker on play without alarms". The Play copy keeps the eclipse
+      list, the countdown and the calendar file (Save the calendar file and Add to calendar need no
+      permission); the full version, with ringing alarms, stays on Zapstore, GitHub Releases and
+      Obtainium under the sovereign package no.stormberry.eclipsetracker.
+
+      What stays: MainActivity (the page) and androidx.core's FileProvider, through which Add to
+      calendar hands the calendar file to the calendar app. Neither needs a permission.
+
+      PlayManifestTest reads this file and the main manifest and fails when a permission or a
+      component named in main is not removed here, so a new alarm permission cannot reach Play by
+      being added to main alone. The merged manifest of a Play build is checked again by
+      checkReleaseMergedManifest (no uses-permission at all), and the built bundle by the kit's
+      check-play-bundle.sh.
+    -->
+
+    <!-- Every permission the ringing alarms use: the nine of android/expected-permissions.txt. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" tools:node="remove" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="remove" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" tools:node="remove" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" tools:node="remove" />
+    <uses-permission android:name="android.permission.VIBRATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" tools:node="remove" />
+
+    <application>
+        <!-- The full-screen ring screen. -->
+        <activity android:name=".alarm.RingActivity" tools:node="remove" />
+        <!-- The foreground service that rings. -->
+        <service android:name=".alarm.AlarmService" tools:node="remove" />
+        <!-- The receiver the alarm manager fires, and Snooze and Dismiss. -->
+        <receiver android:name=".alarm.AlarmFireReceiver" tools:node="remove" />
+        <!-- The receiver that sets the alarms again after a restart, an update or a clock change. -->
+        <receiver android:name=".alarm.SystemEventReceiver" tools:node="remove" />
+    </application>
+</manifest>

@@ -38,7 +38,7 @@ description: |
   - RECEIVE_BOOT_COMPLETED: to set your alarms again after the phone restarts.
   The list, the countdown and the calendar file need none of them. Check for yourself before installing:
 
-      aapt dump permissions eclipsetracker-v2.0.0.apk
+      aapt dump permissions <the APK you downloaded>
 
   The app runs the same page as eclipse.stormberry.as from inside the APK, offline. The build checks that every bundled file is byte for byte the one in the source repository, apart from one added line for the bridge to Android. The alarm times on the phone are worked out by a Kotlin port of the website's planner, tested against the same test cases.
 
@@ -58,8 +58,9 @@ website: https://eclipse.stormberry.as
 
 # The release text Zapstore shows for this version. Without this line zsp takes the
 # GitHub release body, which the workflow leaves to GitHub's generated notes. Point it
-# at the changelog of the versionCode being released, and change it at every release.
-release_notes: ./fastlane/metadata/android/en-US/changelogs/20000.txt
+# at the changelog of the versionCode being released, and change it at every release
+# (2.0.1 is versionCode 20001).
+release_notes: ./fastlane/metadata/android/en-US/changelogs/20001.txt
 
 # The APK ships no raster icon (the launcher icon is an adaptive-icon XML built from
 # vectors), and a store front-end without a bitmap shows an empty tile. So the icon is

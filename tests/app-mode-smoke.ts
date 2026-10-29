@@ -40,7 +40,12 @@
 //     412 px: the title whole, no sideways scroll, every select whole, the overview's buttons 48 px;
 //   * fix D (N-4): the planner's two app buttons are 48 px tall too, at 1.0 and when enlarged;
 //   * fix C: the disclaimer with the app's headers, readable in the dark and the light scheme;
-//   * the website, and the APK's files on a WebView too old for the channel, show none of it.
+//   * the website, and the APK's files on a WebView too old for the channel, show none of it;
+//   * the Google Play edition (/play/: the line the build injects with data-edition="play",
+//     WebAssets.PLAY_INJECTED_TAG): Add to calendar after Save, which stays primary, and nothing
+//     about ringing alarms: no Set ringing alarms, no overview, no app travel note, a closing note
+//     that says the app keeps the last calendar file, and no alarm message ever posted, even when
+//     the app sends alarm news.
 // Nothing leaves the machine: the browser can reach only this server.
 //
 // The file name does not end in .test.ts, so `node --test tests/*.test.ts` does not run it.
@@ -87,6 +92,13 @@ const BASE_FONT_PX = Number(group(/const val BASE_FONT_PX = (\d+)/, TEXT_SCALE_K
 const BASE_FIXED_FONT_PX = Number(group(/const val BASE_FIXED_FONT_PX = (\d+)/, TEXT_SCALE_KT));
 const appFontSizes = (scale: number): { standard: number; fixed: number } => ({ standard: Math.round(BASE_FONT_PX * scale), fixed: Math.round(BASE_FIXED_FONT_PX * scale) });
 const BRIDGE_TAG = '<script src="android-bridge.js"></script>';
+/** The Google Play edition's line (WebAssets.PLAY_INJECTED_TAG): the same script, told the edition. */
+const PLAY_TAG = '<script src="android-bridge.js" data-edition="play"></script>';
+// Both lines are the build's own (android/app/build.gradle.kts, WebAssets), escaped as Kotlin writes them.
+{
+  const gradle = readFileSync(join(ROOT, 'android/app/build.gradle.kts'), 'utf8');
+  for (const tag of [BRIDGE_TAG, PLAY_TAG]) assert.ok(gradle.includes(`"${tag.replace(/"/g, '\\"')}"`), `build.gradle.kts injects ${tag}`);
+}
 const TYPES: Readonly<Record<string, string>> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2' };
 /** What the app serves: the compiled bridge script. */
 const BRIDGE_SRC = readFileSync(join(ROOT, 'android/web-overlay/android-bridge.js'), 'utf8');
@@ -100,17 +112,17 @@ const W = (name: string): string => {
   if (word === undefined) throw new Error(`no ${name} in android-bridge.ts`);
   return word;
 };
-const WORDS = ['SET', 'ADD', 'TRAVEL', 'KEEPS', 'SET_ONE', 'SET_MANY', 'SET_NONE', 'SET_FAILED', 'CAL_OPENED', 'CAL_SHARED', 'CAL_FAILED', 'SAVE_FAILED', 'HEADING', 'INTRO', 'EMPTY', 'CHANGE', 'DELETE', 'DELETED'] as const;
+const WORDS = ['SET', 'ADD', 'TRAVEL', 'KEEPS', 'SET_ONE', 'SET_MANY', 'SET_NONE', 'SET_FAILED', 'CAL_OPENED', 'CAL_SHARED', 'CAL_FAILED', 'SAVE_FAILED', 'HEADING', 'INTRO', 'EMPTY', 'CHANGE', 'DELETE', 'DELETED', 'PLAY_KEEPS'] as const;
 const T = Object.fromEntries(WORDS.map((k) => [k, W(k)])) as Record<typeof WORDS[number], string>;
 const A4 = "Ringing alarms follow your phone's time zone: if you travel, a 12.00 alarm rings at 12.00 where you are. Alarms before greatest eclipse always follow the eclipse.";
 const WEB_TRAVEL = 'If you travel, those alarms still ring at the same moment, which may be a different hour where you are.';
 
 // WebAssets.inject: the bridge tag on its own line, before the first <script, same indent.
-function inject(source: string): string {
+function inject(source: string, tag: string = BRIDGE_TAG): string {
   const first = source.indexOf('<script');
   const lineStart = source.lastIndexOf('\n', first) + 1;
   const indent = source.slice(lineStart, first);
-  return `${source.slice(0, lineStart)}${indent}${BRIDGE_TAG}\n${source.slice(lineStart)}`;
+  return `${source.slice(0, lineStart)}${indent}${tag}\n${source.slice(lineStart)}`;
 }
 
 // /app/... is the APK's copy, /web/... the website, both from the same files; anything else (the
@@ -121,6 +133,9 @@ const server = createServer((req, res) => {
   let path = decodeURIComponent(url.pathname);
   const nohash = path.startsWith('/nohash/');
   if (nohash) path = path.replace(/^\/nohash\//, '/app/');
+  // /play/... is the Google Play edition's copy: the APK's files with the Play edition's line.
+  const play = path.startsWith('/play/');
+  if (play) path = path.replace(/^\/play\//, '/app/');
   const app = path.startsWith('/app/');
   if (!app && !path.startsWith('/web/')) path = `/web${path}`;
   const rel = path.replace(/^\/(app|web)\//, '/');
@@ -135,7 +150,7 @@ const server = createServer((req, res) => {
     if (req.method === 'GET' && file.startsWith(ROOT) && !/^\/(android|tests|tools|ts|node_modules)\//.test(relFile) && existsSync(file) && statSync(file).isFile() && TYPES[extname(file)]) {
       body = readFileSync(file);
       type = TYPES[extname(file)];
-      if (app && file === join(ROOT, 'index.html')) body = Buffer.from(inject(body.toString('utf8')));
+      if (app && file === join(ROOT, 'index.html')) body = Buffer.from(inject(body.toString('utf8'), play ? PLAY_TAG : BRIDGE_TAG));
     }
   }
   if (!body) {
@@ -650,6 +665,64 @@ await check('fix B, A-9: Change works for an alarm kept after greatest eclipse; 
   assert.deepEqual(m.log.errors, []);
   assert.deepEqual(m.log.csp, []);
   await m.close();
+});
+
+await check('the Google Play edition: Add to calendar after Save, nothing about ringing alarms, no alarm message', async () => {
+  const g = await open('/play/');
+  await g.waitFor("document.documentElement.dataset.ready === 'true'");
+  assert.deepEqual(await g.ev('window.__et.posted[0]'), { type: 'hello', v: 1 });
+  assert.equal(await g.ev("document.querySelector('script[src=\"android-bridge.js\"]').dataset.edition"), 'play', 'the page carries the Play line');
+  assert.equal(await g.ev("typeof window.EclipseTrackerApp.saveFile"), 'function', 'the bridge is there');
+  assert.equal(await g.ev("Object.isFrozen(window.EclipseTrackerApp)"), true);
+  assert.equal(await g.ev("'travelNote' in window.EclipseTrackerApp"), false, 'no app travel note');
+  assert.equal(await g.ev("!!document.getElementById('app-alarms') || !!document.getElementById('app-set') || !!document.getElementById('app-problems')"), false, 'no ringing alarms, no overview');
+  await g.click('#next-alarms');
+  await g.waitFor("document.getElementById('planner').open");
+  const order = await g.ev("[...document.querySelectorAll('.planner-actions button')].map((b) => [b.id, b.className, b.textContent])");
+  assert.deepEqual(order, [
+    ['save-ics', 'btn btn-primary', 'Save the calendar file'],
+    ['app-calendar', 'btn btn-secondary', T.ADD],
+    ['close-planner', 'btn btn-secondary', 'Close'],
+  ]);
+  assert.equal(await g.ev("document.getElementById('app-calendar').getBoundingClientRect().height >= 47.5"), true, 'Add to calendar is 48 px tall (fix D, N-4)');
+  assert.match(await g.ev("document.getElementById('planner-zone').textContent"), new RegExp(WEB_TRAVEL.replace(/[.()]/g, '\\$&')), "the website's travel sentences");
+  assert.equal(await g.ev(`document.body.innerText.includes(${J(A4)})`), false, "no app travel note");
+  const playNote = await g.ev("document.querySelector('.planner-note').textContent");
+  assert.ok(playNote.endsWith(T.PLAY_KEEPS) && !playNote.includes('keeps nothing'), `the Play closing note says the app keeps the last calendar file: ${playNote}`);
+  assert.ok(playNote.startsWith('Open the saved file with your calendar app'), 'the rest of the note is the approved text');
+  assert.equal(await g.ev("document.querySelectorAll('.alarm-row').length"), 1, 'the planner opens with the default alarm, as on the website');
+  // Add to calendar and Save work as in the sovereign edition.
+  await g.click('#app-calendar');
+  await waitStatus(g, T.CAL_OPENED);
+  const add = (await posted(g, 'calendar.add')).at(-1);
+  assert.equal(add.fileName, 'eclipse-2027-02-06-solar.ics');
+  assert.ok(add.ics.startsWith('BEGIN:VCALENDAR\r\n') && add.ics.endsWith('END:VCALENDAR\r\n'));
+  await g.click('#save-ics');
+  await waitStatus(g, 'Saved eclipse-2027-02-06-solar.ics with 1 alarm. Open it with your calendar app.');
+  assert.equal((await posted(g, 'calendar.save')).at(-1).fileName, 'eclipse-2027-02-06-solar.ics');
+  assert.deepEqual(g.log.downloads, [], 'no download in the app');
+  // Back closes the planner, as in the sovereign edition.
+  await g.ev("window.__et.send({ type: 'back', q: 1 })");
+  await g.waitFor("!document.getElementById('planner').open");
+  await g.waitFor("window.__et.posted.some((m) => m.type === 'back.result' && m.q === 1)");
+  assert.deepEqual((await posted(g, 'back.result')).at(-1), { type: 'back.result', q: 1, handled: true, v: 1 });
+  // Alarm news from the app (which the Play app never sends) draws nothing, and nothing asks for alarms.
+  await g.ev("window.__et.send({ type: 'alarms', ok: true, records: [], armed: [], problems: ['notifications-denied'] })");
+  await g.ev("document.dispatchEvent(new Event('visibilitychange'))");
+  await sleep(1500);
+  assert.equal(await g.ev("!!document.getElementById('app-alarms') || !!document.getElementById('app-problems')"), false);
+  const types = [...new Set((await g.ev('window.__et.posted.map((m) => m.type)')) as string[])].sort();
+  assert.deepEqual(types, ['back.result', 'calendar.add', 'calendar.save', 'hello'], 'no alarms.list, alarms.set or problem.fix');
+  const text = await g.ev('document.body.innerText');
+  for (const w of [T.SET, T.HEADING, T.KEEPS, 'ringing alarm']) assert.ok(!text.toLowerCase().includes(w.toLowerCase()), `the Play page does not say ${w}`);
+  houseStyle(text, 'Play edition page');
+  if (SHOTS) await g.shot(join(SHOTS, 'play-page-1280.png'));
+  assert.deepEqual(g.log.errors, []);
+  assert.deepEqual(g.log.csp, []);
+  assert.deepEqual(await g.ev('window.__csp'), []);
+  assert.deepEqual(g.log.offsite, []);
+  assert.equal(await g.ev('localStorage.length + sessionStorage.length'), 0);
+  await g.close();
 });
 
 await check('the website, and the APK files on a WebView too old for the channel, show none of the app parts', async () => {

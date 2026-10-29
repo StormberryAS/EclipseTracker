@@ -23,6 +23,18 @@
  * The planner's closing note says the app keeps the ringing alarms on the phone (the website's
  * "keeps nothing" is not true inside the app).
  *
+ * THE GOOGLE PLAY EDITION (29 October 2026) has no ringing alarms. The build tells this script so
+ * through the one line it injects: <script src="android-bridge.js" data-edition="play"> (the
+ * sovereign line has no data-edition; WebAssets.injectedTag in android/app/build.gradle.kts). In
+ * the Play edition the script adds "Add to calendar" after "Save the calendar file" (which stays the
+ * primary button) and Android's Back, and nothing else: no "Set ringing alarms", no "Ringing alarms"
+ * overview, no problems, no app travel note (the website's two travel sentences stay, true of a
+ * calendar file), and its own closing sentence (PLAY_KEEPS: Add to calendar leaves the last file
+ * handed over in cache/calendar/ until the app next starts afresh, MainActivity.onCreate, so the
+ * website's "keeps nothing" is not true here either), and it never asks the app for alarms, so the
+ * app never asks for the notification permission. The app answers any alarm message with ok:false all the same
+ * (AlarmFreeBridge.kt).
+ *
  * The channel is window.ETBridge, injected by the app through WebViewCompat.addWebMessageListener
  * ONLY into pages from https://appassets.androidplatform.net. It carries JSON text only, and the
  * app checks every message again (BridgeMessage.kt, CalendarHandover.kt, the record checks): the
@@ -105,6 +117,12 @@ interface Outgoing {
   /* The channel, known to be there from here on (also inside the functions below). */
   const channel: WebMessagePort = bridge;
 
+  /* The edition, from the tag that loaded this script (read while it runs, the one moment
+     document.currentScript is this script): true in the Google Play edition, which has no ringing
+     alarms. */
+  const loader = document.currentScript;
+  const PLAY = loader instanceof HTMLScriptElement && loader.dataset['edition'] === 'play';
+
   /* ---------- The app's own words (new in stage B, for Marcos's approval) ---------- */
   const T = {
     SET: 'Set ringing alarms',
@@ -113,6 +131,9 @@ interface Outgoing {
     TRAVEL: "Ringing alarms follow your phone's time zone: if you travel, a 12.00 alarm rings at 12.00 where you are. Alarms before greatest eclipse always follow the eclipse.",
     /* Replaces the planner note's last sentence, "EclipseTracker sends nothing and keeps nothing." */
     KEEPS: 'EclipseTracker sends nothing; the ringing alarms you set are kept on this phone only.',
+    /* The same sentence in the Google Play edition, which keeps no alarm but does keep the last file
+       handed to the calendar app until the app next starts afresh (29 October 2026, DRAFT). */
+    PLAY_KEEPS: 'EclipseTracker sends nothing; it keeps only the last file you added to your calendar, until the app next starts afresh.',
     SET_ONE: '1 ringing alarm set.',
     SET_MANY: '{n} ringing alarms set.',
     SET_NONE: 'No ringing alarm is set for this eclipse.',
@@ -215,9 +236,13 @@ interface Outgoing {
 
   /* ---------- What the page asks of the app (window.EclipseTrackerApp) ---------- */
 
+  /* The Play edition has no travel note of its own: the page keeps the website's two sentences. */
+  const travel: { travelNote?: string } = PLAY ? {} : { travelNote: T.TRAVEL };
   window.EclipseTrackerApp = Object.freeze({
-    travelNote: T.TRAVEL,
+    ...travel,
     rowsFor: function (eclipseId: string): Promise<PlannerRow[]> {
+      /* The Play edition stores no alarm: the planner opens with the page's default, as on the website. */
+      if (PLAY) return Promise.resolve([]);
       return listAlarms().then(function (records) { return page ? page.core.rowsFromRecords(records, eclipseId) : []; });
     },
     saveFile: function (name: string, text: string): Promise<boolean> {
@@ -233,6 +258,7 @@ interface Outgoing {
          minute is seen as one at the next look and the armed times are asked for again. */
       lastZone = page.zone();
       setUpPlanner();
+      if (PLAY) return;
       setUpOverview();
       listAlarms();
     }
@@ -255,19 +281,31 @@ interface Outgoing {
 
   function setUpPlanner(): void {
     const save = document.getElementById('save-ics');
-    if (!save || document.getElementById('app-set')) return;
-    /* Ringing alarms are the app's first output: Set ringing alarms is the primary button. */
-    /* Fix D (17 October 2026, N-4): the app's two planner buttons are 48 px tall too (touchSize, C-4). */
-    const set = touchSize(button('app-set', 'btn btn-primary', T.SET));
+    if (!save || document.getElementById('app-set') || document.getElementById('app-calendar')) return;
+    /* Fix D (17 October 2026, N-4): the app's planner buttons are 48 px tall too (touchSize, C-4). */
     const add = touchSize(button('app-calendar', 'btn btn-secondary', T.ADD));
+    if (PLAY) {
+      /* The Google Play edition: Save stays the primary button, Add to calendar follows it, and the
+         note's last sentence says what the app keeps (the last file handed to the calendar app). */
+      save.insertAdjacentElement('afterend', add);
+      add.addEventListener('click', addToCalendar);
+      replaceKeeps(T.PLAY_KEEPS);
+      return;
+    }
+    /* Ringing alarms are the app's first output: Set ringing alarms is the primary button. */
+    const set = touchSize(button('app-set', 'btn btn-primary', T.SET));
     save.className = save.className.replace('btn-primary', 'btn-secondary');
     save.insertAdjacentElement('beforebegin', set);
     save.insertAdjacentElement('afterend', add);
     set.addEventListener('click', setRinging);
     add.addEventListener('click', addToCalendar);
+    replaceKeeps(T.KEEPS);
+  }
 
+  /* Replaces the planner note's last sentence, the website's "keeps nothing", with the app's own. */
+  function replaceKeeps(words: string): void {
     const note = document.querySelector('.planner-note');
-    if (note && note.textContent !== null && note.textContent.indexOf(WEB_KEEPS) >= 0) note.textContent = note.textContent.replace(WEB_KEEPS, T.KEEPS);
+    if (note && note.textContent !== null && note.textContent.indexOf(WEB_KEEPS) >= 0) note.textContent = note.textContent.replace(WEB_KEEPS, words);
   }
 
   function setRinging(): void {
@@ -486,8 +524,10 @@ interface Outgoing {
     lastZone = zone;
     render();
   }
-  window.setInterval(refresh, 60000);
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) window.setTimeout(refresh, 1200); });
+  if (!PLAY) {
+    window.setInterval(refresh, 60000);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) window.setTimeout(refresh, 1200); });
+  }
 
   /* ---------- Back ---------- */
 
@@ -522,7 +562,7 @@ interface Outgoing {
         return;
       }
     }
-    if (msg.type === 'alarms' && msg.id === undefined) takeAlarms(msg);
+    if (msg.type === 'alarms' && msg.id === undefined && !PLAY) takeAlarms(msg);
   });
 
   post({ type: 'hello' });

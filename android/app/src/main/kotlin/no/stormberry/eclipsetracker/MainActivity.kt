@@ -47,7 +47,9 @@ import no.stormberry.eclipsetracker.alarm.AlarmService
 import no.stormberry.eclipsetracker.alarm.AlarmState
 import no.stormberry.eclipsetracker.alarm.Problem
 import no.stormberry.eclipsetracker.alarm.RingActivity
+import no.stormberry.eclipsetracker.core.BundledCatalogue
 import no.stormberry.eclipsetracker.core.Json
+import no.stormberry.eclipsetracker.web.AlarmFreeBridge
 import no.stormberry.eclipsetracker.web.BridgeMessage
 import no.stormberry.eclipsetracker.web.CalendarHandover
 import no.stormberry.eclipsetracker.web.NavigationPolicy
@@ -77,6 +79,12 @@ import java.util.concurrent.Executors
  *    anywhere else, shows it, so an alarm that rings with nothing on screen (notifications off)
  *    can always be stopped.
  * There is no INTERNET permission: nothing can leave the device through this app.
+ *
+ * THE GOOGLE PLAY EDITION (Edition.ALARMS false, `-PplayBuild=true`, 29 October 2026) has no ringing
+ * alarms: every alarm hook here (the notification channels, the ring-screen listener, the re-plan on
+ * resume, the notification request, the fix screens) is behind `if (Edition.ALARMS)`, so R8 removes
+ * it and the alarm package with it, and a message about alarms is refused (AlarmFreeBridge) without
+ * the alarm engine being touched. The page, the calendar file, Save, Back and links work as above.
  */
 class MainActivity : ComponentActivity() {
 
@@ -132,7 +140,7 @@ class MainActivity : ComponentActivity() {
             .build()
         WebView.setWebContentsDebuggingEnabled(debuggable)
         CookieManager.getInstance().setAcceptCookie(false)
-        AlarmService.ensureChannels(this)
+        if (Edition.ALARMS) AlarmService.ensureChannels(this)
 
         container = FrameLayout(this).apply { setBackgroundColor(page) }
         setContentView(container)
@@ -181,14 +189,16 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         webView?.onResume()
         sidePage?.onResume()
-        // Back from Settings, or after a journey: the problems and the armed times may have changed.
-        pushAlarms(null)
-        AlarmService.addListener(ringListener)
-        showRingScreenIfRinging()
+        if (Edition.ALARMS) {
+            // Back from Settings, or after a journey: the problems and the armed times may have changed.
+            pushAlarms(null)
+            AlarmService.addListener(ringListener)
+            showRingScreenIfRinging()
+        }
     }
 
     override fun onPause() {
-        AlarmService.removeListener(ringListener)
+        if (Edition.ALARMS) AlarmService.removeListener(ringListener)
         sidePage?.onPause()
         webView?.onPause()
         super.onPause()
@@ -199,6 +209,7 @@ class MainActivity : ComponentActivity() {
 
     /** Fix B, A-1: the ring screen, whenever an alarm rings and this screen is in front. */
     private fun showRingScreenIfRinging() {
+        if (!Edition.ALARMS) return
         if (AlarmService.current() == null || isFinishing || isDestroyed) return
         try {
             startActivity(Intent(this, RingActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -417,6 +428,17 @@ class MainActivity : ComponentActivity() {
         if (message.type != WebMessageCompat.TYPE_STRING) return
         val msg = BridgeMessage.parse(message.data) ?: return
         pageProxy = proxy
+        if (!Edition.ALARMS) {
+            // The Google Play edition: no alarm engine to ask (AlarmFreeBridge).
+            when (AlarmFreeBridge.action(msg)) {
+                AlarmFreeBridge.Action.REFUSE -> {
+                    post(proxy, AlarmFreeBridge.refusal(AlarmFreeBridge.requestId(msg)))
+                    return
+                }
+                AlarmFreeBridge.Action.IGNORE -> return
+                AlarmFreeBridge.Action.HANDLE -> Unit
+            }
+        }
         when (msg) {
             BridgeMessage.Hello -> Unit
             is BridgeMessage.ListAlarms -> pushAlarms(msg.id, proxy)
@@ -454,6 +476,7 @@ class MainActivity : ComponentActivity() {
 
     /** Re-plans (which also refreshes the problems) and tells the page, if one is listening. */
     private fun pushAlarms(id: Int?, to: JavaScriptReplyProxy? = pageProxy) {
+        if (!Edition.ALARMS) return
         val proxy = to ?: return
         io.execute {
             val state = AlarmScheduling.replan(applicationContext)
@@ -462,6 +485,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun setAlarms(msg: BridgeMessage.SetAlarms, proxy: JavaScriptReplyProxy) {
+        if (!Edition.ALARMS) return
         io.execute {
             val state = AlarmScheduling.setEclipse(applicationContext, msg.eclipseId, msg.records)
             if (state == null) {
@@ -478,6 +502,7 @@ class MainActivity : ComponentActivity() {
 
     /** Android 13 and later: the notification permission, asked once, when ringing alarms are first set. */
     private fun maybeAskNotifications(): Boolean {
+        if (!Edition.ALARMS) return false
         if (askedNotifications || isFinishing || isDestroyed) return false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return false
@@ -487,6 +512,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun fixProblem(wire: String) {
+        if (!Edition.ALARMS) return
         val problem = Problem.fromWire(wire) ?: return
         if (problem == Problem.NOTIFICATIONS && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
@@ -513,7 +539,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun calendar(msg: BridgeMessage.Calendar, proxy: JavaScriptReplyProxy) {
-        val catalogue = AlarmScheduling.catalogue(this)
+        val catalogue = BundledCatalogue.get(this)
         val file = CalendarHandover.check(msg.fileName, msg.ics) { catalogue[it] != null }
         if (file == null) {
             Log.w(TAG, "calendar file refused")

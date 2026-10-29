@@ -86,6 +86,25 @@ The app bundles an explicit list of web files (`WebAssets.INCLUDES` in `android/
 
 A signed release needs the release key, which never enters this repository: the release workflow signs with apksigner from the `release` environment's secrets.
 
+### Google Play edition, without ringing alarms
+
+Since 2.0.1 the same source also builds a Google Play edition, a separate package, `no.stormberry.eclipsetracker.play`. It has the eclipse list, the countdown, the filters and the calendar file (Save the calendar file, and Add to calendar, which hands the file to your calendar app), and no ringing alarms: no alarm permission, no alarm component and none of the alarm engine (the app only reads and refuses alarm messages), so it asks for no permission at all and, like the full app, has no internet permission. Alarms in a calendar file are rung by your calendar app; some calendar apps, Google Calendar among them, leave them out and use their own reminders instead. The full app, with ringing alarms, stays on Zapstore and GitHub Releases as `no.stormberry.eclipsetracker`. The two packages install side by side and neither can update the other.
+
+```bash
+./gradlew --no-configuration-cache :app:bundleRelease -PplayBuild=true   # needs the Play upload key (PLAY_UPLOAD_*)
+```
+
+- `android/app/src/play/AndroidManifest.xml`, merged over the main manifest, removes the nine permissions and the four alarm components; `PlayManifestTest` fails when main names a permission or component the overlay does not remove.
+- `Edition.ALARMS` (`android/app/src/sovereign/kotlin` or `android/app/src/play/kotlin`) is a compile-time constant: false in the Play edition, so every alarm hook in `MainActivity` is dead code that R8 deletes with the alarm package. Should the page ask for alarms anyway, the app answers no (`AlarmFreeBridge.kt`).
+- The bridge script learns the edition from the line the build injects into `index.html` (`data-edition="play"`) and then adds only Add to calendar; the page keeps the website's wording.
+- The build refuses a release bundle without `-PplayBuild=true` or without a complete upload key, a release APK with `-PplayBuild=true`, an upload key that is the release key, and an upload password with the configuration cache on. Google re-signs the bundle with an app signing key it holds; the upload key (certificate SHA-256 `a6d1575aef50e2de85d8e01f8f882fcc205d83c0ab097e75e995c8e048d7f9a6`) only proves who uploaded it.
+
+Every Play bundle is built from a sovereign release tag that shipped on GitHub Releases. Play shows the same version name; its versionCode is 1,000,000 plus the sovereign one. The offset is a million, not the 1000 of the other Stormberry apps, because sovereign codes here are major * 10000 + minor * 100 + patch, so 1000 + 20001 would read like a future sovereign 2.10.1.
+
+| Sovereign tag | Sovereign versionCode | Play versionName | Play versionCode |
+|-|-|-|-|
+| `android-v2.0.1` | 20001 | 2.0.1 | 1020001 |
+
 ## Development
 ```bash
 tools/build-ts.sh            # compile ts/ and the Android bridge script, type-check the tests, restamp the assets (needs Node 24, npm, python3)

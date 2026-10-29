@@ -38,7 +38,7 @@ test('every relative import in the compiled JavaScript carries a ?v= stamp', () 
 test('_config.yml keeps sources, tooling and tests off the site, and publishes the app', () => {
   const cfg = read('_config.yml');
   const excluded = [...cfg.matchAll(/^ {2}- (\S+)$/gm)].map((m) => m[1]);
-  for (const x of ['ts/', 'tools/', 'tests/', 'node_modules/', 'package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.core.json', '.npmrc', 'bump_assets.py', 'README.md', 'DISCLAIMER.md', 'LICENSE', 'android/', 'fastlane/', 'zapstore.yaml']) {
+  for (const x of ['ts/', 'tools/', 'tests/', 'node_modules/', 'package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.core.json', '.npmrc', 'bump_assets.py', 'README.md', 'CHANGELOG.md', 'DISCLAIMER.md', 'LICENSE', 'android/', 'fastlane/', 'zapstore.yaml']) {
     assert.ok(excluded.includes(x), `${x} is excluded`);
   }
   for (const x of ['core/', 'data/', 'app.js', 'index.html', 'style.css', 'disclaimer.html']) assert.ok(!excluded.includes(x), `${x} is published`);

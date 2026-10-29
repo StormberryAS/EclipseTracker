@@ -12,6 +12,7 @@ import androidx.core.content.edit
 import androidx.core.net.toUri
 import no.stormberry.eclipsetracker.MainActivity
 import no.stormberry.eclipsetracker.core.AlarmRecord
+import no.stormberry.eclipsetracker.core.BundledCatalogue
 import no.stormberry.eclipsetracker.core.EclipseCatalogue
 import org.json.JSONArray
 import org.json.JSONObject
@@ -223,20 +224,15 @@ object AlarmScheduling {
      * a process that dies in between posts them at its next start.
      */
     private const val KEY_UNTOLD = "missed_untold"
-    private const val CATALOGUE_ASSET = "web/data/eclipses.json"
 
     private val lock = Any()
 
-    @Volatile
-    private var catalogue: EclipseCatalogue? = null
-
-    /** The bundled eclipse list (assets/web/data/eclipses.json), read once. */
-    fun catalogue(context: Context): EclipseCatalogue =
-        catalogue ?: synchronized(lock) {
-            catalogue ?: context.applicationContext.assets.open(CATALOGUE_ASSET).use { input ->
-                EclipseCatalogue.parse(String(input.readBytes(), Charsets.UTF_8))
-            }.also { catalogue = it }
-        }
+    /**
+     * The bundled eclipse list (assets/web/data/eclipses.json), read once by BundledCatalogue, which
+     * lives outside this package since 29 October 2026 so the Google Play edition can leave the
+     * whole alarm package out.
+     */
+    fun catalogue(context: Context): EclipseCatalogue = BundledCatalogue.get(context)
 
     private fun prefs(context: Context): SharedPreferences = context.applicationContext
         .createDeviceProtectedStorageContext()
