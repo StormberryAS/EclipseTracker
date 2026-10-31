@@ -156,3 +156,21 @@ test('the only JavaScript is compiled output, each file marked linguist-generate
   assert.equal(attrs.length - 1, compiled.length * 3);
 });
 
+
+test("the Android app section (2026-10-30): Marcos's sentence, both store buttons, website only", () => {
+  const section = group(/(<section class="android-app"[\s\S]*?<\/section>)/, page);
+  assert.match(section, /^<section class="android-app" id="android-app" aria-labelledby="android-app-title" data-web-only>/);
+  assert.ok(section.includes('<p><strong id="android-app-title">Android app</strong>: the same eclipse list and countdown on your phone, with a calendar file for each eclipse. No internet access.</p>'));
+  const links = [...section.matchAll(/<a ([^>]*)>([\s\S]*?)<\/a>/g)].map((m) => [m[1], m[2]]);
+  assert.deepEqual(links, [
+    ['class="btn btn-secondary" href="https://zapstore.dev/apps/no.stormberry.eclipsetracker" target="_blank" rel="noopener"', 'Get the Android app on Zapstore<span class="sr-only"> (opens in a new tab)</span>'],
+    ['class="btn btn-secondary" href="https://play.google.com/store/apps/details?id=no.stormberry.eclipsetracker.play" target="_blank" rel="noopener"', 'Get the Android app on Google Play<span class="sr-only"> (opens in a new tab)</span>'],
+  ]);
+  assert.match(section, /<div class="store-links">/);
+  // The last thing in main, and the only part of the page marked website only.
+  assert.match(page, /<\/section>\s*<\/main>/);
+  assert.ok(page.indexOf(section) > page.indexOf('id="list-heading"'));
+  assert.equal([...page.replace(/<!--[\s\S]*?-->/g, '').matchAll(/data-web-only/g)].length, 1);
+  // The page's [hidden] rule wins over the section's display rule, so the bridge can hide it.
+  assert.match(read('style.css'), /\[hidden\] \{ display: none !important; \}/);
+});

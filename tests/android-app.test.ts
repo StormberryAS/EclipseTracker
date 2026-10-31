@@ -103,6 +103,26 @@ test('the bridge script keeps the page private and is the only channel', () => {
   assert.match(read(`${KT}/MainActivity.kt`), /BRIDGE_NAME = "ETBridge"/);
 });
 
+test('the bridge hides every website-only part in both editions, before it looks for the channel (2026-10-30)', () => {
+  for (const f of [BRIDGE_TS, BRIDGE_JS]) {
+    const code = read(f).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    const hide = code.search(/querySelectorAll(<HTMLElement>)?\('\[data-web-only\]'\)/);
+    const channel = code.indexOf('window.ETBridge');
+    assert.ok(hide > 0, `${f}: hides [data-web-only]`);
+    assert.ok(channel > hide, `${f}: the hiding comes before the channel check, so a WebView too old for the channel hides them too`);
+    // Its own script, ended before the bridge's: the bridge's early return cannot skip it.
+    assert.ok(code.slice(hide, channel).includes('})();'), `${f}: a script of its own`);
+    // Parts added later, and a hidden attribute taken off, are caught too; nothing depends on the edition.
+    assert.match(code, /new MutationObserver/, f);
+    assert.match(code, /attributeFilter: \['hidden', 'data-web-only'\]/, f);
+    assert.doesNotMatch(code.slice(0, channel), /PLAY|edition/, f);
+  }
+  // The page's one website-only part is the store section, and the page never names the script.
+  const page = read('index.html');
+  assert.match(page, /<section class="android-app" id="android-app" aria-labelledby="android-app-title" data-web-only>/);
+  assert.ok(!page.includes('android-bridge'), 'index.html never names the bridge script (WebAssets.inject refuses it)');
+});
+
 test("the travel note is Marcos's text exactly, and only in the app", () => {
   for (const f of [BRIDGE_TS, BRIDGE_JS]) assert.ok(read(f).includes(`TRAVEL: "${A4}"`), f);
   for (const f of ['index.html', 'app.js', 'ts/app.ts', 'style.css']) {

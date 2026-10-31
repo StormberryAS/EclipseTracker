@@ -41,6 +41,8 @@
 //   * fix D (N-4): the planner's two app buttons are 48 px tall too, at 1.0 and when enlarged;
 //   * fix C: the disclaimer with the app's headers, readable in the dark and the light scheme;
 //   * the website, and the APK's files on a WebView too old for the channel, show none of it;
+//   * the website-only store section (Zapstore and Google Play, 2026-10-30) is hidden in the app, in
+//     both editions and on a WebView too old for the channel, and shown on the website;
 //   * the Google Play edition (/play/: the line the build injects with data-edition="play",
 //     WebAssets.PLAY_INJECTED_TAG): Add to calendar after Save, which stays primary, and nothing
 //     about ringing alarms: no Set ringing alarms, no overview, no app travel note, a closing note
@@ -234,6 +236,17 @@ const setSelect = (p: Page, selector: string, value: string): Promise<void> => p
 const setTime = (p: Page, selector: string, value: string): Promise<void> => p.ev(`(() => { const t = ${selector}; t.focus(); t.value = ${J(value)}; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
 const waitStatus = (p: Page, text: string): Promise<boolean> => p.waitFor(`document.getElementById('planner-status').textContent === ${J(text)}`, 4000);
 const RECORD_ID = /^[0-9a-f]{32}$/;
+/** The website-only store section (2026-10-30): hidden by the attribute, takes no room, its links not shown. */
+const STORE = `(() => { const s = document.getElementById('android-app'); if (!s) return null; const r = s.getBoundingClientRect();
+  return { webOnly: s.hasAttribute('data-web-only'), hidden: s.hidden, display: getComputedStyle(s).display, height: r.height,
+    links: [...s.querySelectorAll('a')].map((a) => [a.getAttribute('href'), a.getBoundingClientRect().height]) }; })()`;
+const ZAPSTORE = 'https://zapstore.dev/apps/no.stormberry.eclipsetracker';
+const PLAY_STORE = 'https://play.google.com/store/apps/details?id=no.stormberry.eclipsetracker.play';
+const storeHidden = async (pg: Page, where: string): Promise<void> => {
+  const st = await pg.ev(STORE);
+  assert.ok(st && st.webOnly && st.hidden && st.display === 'none' && st.height === 0, `${where}: the store section is hidden: ${J(st)}`);
+  assert.deepEqual(st.links.map((l: [string, number]) => l[1]), [0, 0], `${where}: neither store button is shown`);
+};
 
 const p = await open('/app/');
 
@@ -244,6 +257,9 @@ await check('the bridge says hello, the page starts with the app parts, and noth
   assert.equal(await p.ev("Object.isFrozen(window.EclipseTrackerApp)"), true);
   assert.equal(await p.ev("!!document.getElementById('app-alarms')"), true);
   assert.equal(await p.ev("document.getElementById('app-alarms-heading').textContent"), T.HEADING);
+  await storeHidden(p, 'the app');
+  // Something taking the hidden attribute off is put back before a paint.
+  assert.equal(await p.ev("(() => { document.getElementById('android-app').hidden = false; return new Promise((r) => requestAnimationFrame(() => r(document.getElementById('android-app').hidden))); })()"), true);
   assert.equal(await p.ev("document.getElementById('app-alarms').previousElementSibling.querySelector('#countdown-timer') !== null"), true, 'the overview follows the countdown card');
   await p.waitFor("document.querySelector('#app-alarms-list .list-count')?.textContent.length > 0");
   assert.equal(await p.ev("document.querySelector('#app-alarms-list .list-count').textContent"), T.EMPTY);
@@ -675,6 +691,7 @@ await check('the Google Play edition: Add to calendar after Save, nothing about 
   assert.equal(await g.ev("typeof window.EclipseTrackerApp.saveFile"), 'function', 'the bridge is there');
   assert.equal(await g.ev("Object.isFrozen(window.EclipseTrackerApp)"), true);
   assert.equal(await g.ev("'travelNote' in window.EclipseTrackerApp"), false, 'no app travel note');
+  await storeHidden(g, 'the Play edition');
   assert.equal(await g.ev("!!document.getElementById('app-alarms') || !!document.getElementById('app-set') || !!document.getElementById('app-problems')"), false, 'no ringing alarms, no overview');
   await g.click('#next-alarms');
   await g.waitFor("document.getElementById('planner').open");
@@ -736,6 +753,15 @@ await check('the website, and the APK files on a WebView too old for the channel
     assert.equal(await w.ev("document.getElementById('save-ics').className"), 'btn btn-primary');
     assert.match(await w.ev("document.querySelector('.planner-note').textContent"), /EclipseTracker sends nothing and keeps nothing\.$/);
     if (path === '/web/') assert.deepEqual(await w.ev('window.__et.posted'), [], 'the website never posts to a bridge');
+    if (path === '/web/') {
+      // The website shows the store section, both buttons at least 44 px tall.
+      const st = await w.ev(STORE);
+      assert.ok(st && st.webOnly && !st.hidden && st.display !== 'none' && st.height > 0, `the website shows the store section: ${J(st)}`);
+      assert.deepEqual(st.links.map((l: [string, number]) => l[0]), [ZAPSTORE, PLAY_STORE]);
+      assert.ok(st.links.every((l: [string, number]) => l[1] >= 44), `both buttons 44 px: ${J(st.links)}`);
+    } else {
+      await storeHidden(w, 'a WebView too old for the channel');
+    }
     assert.deepEqual(w.log.errors, []);
     assert.deepEqual(w.log.csp, []);
     await w.close();

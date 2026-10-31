@@ -4,6 +4,43 @@
     the build refuses to overwrite a hand edit, and its check mode fails on one. */
 (function () {
     'use strict';
+    function hideWebOnly(root) {
+        if (!(root instanceof Element) && !(root instanceof Document))
+            return;
+        if (root instanceof HTMLElement && root.hasAttribute('data-web-only'))
+            root.hidden = true;
+        root.querySelectorAll('[data-web-only]').forEach(function (el) { el.hidden = true; });
+    }
+    function watchWebOnly() {
+        hideWebOnly(document);
+        if (typeof MutationObserver !== 'function')
+            return;
+        new MutationObserver(function (records) {
+            records.forEach(function (rec) {
+                if (rec.type === 'attributes') {
+                    const t = rec.target;
+                    if (t instanceof HTMLElement && t.hasAttribute('data-web-only') && !t.hidden)
+                        t.hidden = true;
+                    return;
+                }
+                rec.addedNodes.forEach(hideWebOnly);
+            });
+        }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'data-web-only'] });
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('readystatechange', function onState() {
+            if (document.readyState === 'loading')
+                return;
+            document.removeEventListener('readystatechange', onState);
+            watchWebOnly();
+        });
+    }
+    else {
+        watchWebOnly();
+    }
+})();
+(function () {
+    'use strict';
     const bridge = window.ETBridge;
     if (!bridge || typeof bridge.postMessage !== 'function')
         return;

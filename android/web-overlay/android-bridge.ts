@@ -107,6 +107,53 @@ interface Outgoing {
   [field: string]: unknown;
 }
 
+/* WEBSITE-ONLY PARTS (30 October 2026). Every element the page marks data-web-only (the section
+   with the "Get the Android app on Zapstore" and "on Google Play" buttons) is hidden inside the
+   app, in both editions, and also on a WebView too old for the message channel, so this runs
+   before the channel is looked for. The same mechanism as MetadataScrubber's and CheckLink's
+   bridge scripts. The app injects this script before the page's first script, at the end of the
+   body, while the document is still loading, so it waits for the end of parsing: readyState
+   leaves 'loading' before the app.js module runs, whereas DOMContentLoaded fires only after it.
+   A MutationObserver hides any data-web-only element the page adds later, and puts back the
+   hidden attribute if anything takes it off; its callback runs before the browser paints, so such
+   a part is never shown, not even briefly. The page's [hidden] rule (style.css) wins over every
+   display rule. */
+(function () {
+  'use strict';
+
+  function hideWebOnly(root: Node): void {
+    if (!(root instanceof Element) && !(root instanceof Document)) return;
+    if (root instanceof HTMLElement && root.hasAttribute('data-web-only')) root.hidden = true;
+    root.querySelectorAll<HTMLElement>('[data-web-only]').forEach(function (el) { el.hidden = true; });
+  }
+
+  function watchWebOnly(): void {
+    hideWebOnly(document);
+    if (typeof MutationObserver !== 'function') return;
+    new MutationObserver(function (records) {
+      records.forEach(function (rec) {
+        if (rec.type === 'attributes') {
+          /* Something took the hidden attribute off a website-only part: put it back. */
+          const t = rec.target;
+          if (t instanceof HTMLElement && t.hasAttribute('data-web-only') && !t.hidden) t.hidden = true;
+          return;
+        }
+        rec.addedNodes.forEach(hideWebOnly);
+      });
+    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'data-web-only'] });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('readystatechange', function onState() {
+      if (document.readyState === 'loading') return;
+      document.removeEventListener('readystatechange', onState);
+      watchWebOnly();
+    });
+  } else {
+    watchWebOnly();
+  }
+})();
+
 (function () {
   'use strict';
 

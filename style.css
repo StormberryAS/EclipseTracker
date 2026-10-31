@@ -133,6 +133,19 @@ dl.event-details { margin-bottom: 0; }
 .btn-secondary { background: transparent; color: var(--text-primary); border: 1px solid var(--border-active); }
 .btn-secondary:hover:not(:disabled) { background: var(--bg-card-hover); }
 
+/* The Android app's store links, Zapstore and Google Play (website only, 2026-10-30). Marked
+   data-web-only in the HTML: the Android app's bridge script hides it, and the [hidden] rule above
+   wins over the display rule here. The two buttons sit side by side when they fit and one above
+   the other on a narrow screen. */
+.android-app {
+  display: flex; flex-direction: column; align-items: center; gap: var(--sp-sm);
+  width: 100%; max-width: 600px; text-align: center;
+  color: var(--text-secondary); font-size: 0.9rem; line-height: 1.5;
+}
+.android-app strong { color: var(--text-primary); font-weight: 600; }
+.store-links { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sp-sm); max-width: 100%; }
+.android-app .btn { position: relative; min-height: 44px; max-width: 100%; padding-left: 1.25rem; padding-right: 1.25rem; white-space: normal; }
+
 .list-heading { font-size: 1.4rem; margin-bottom: var(--sp-sm); }
 .list-intro, .list-source { color: var(--text-secondary); font-size: 0.92rem; }
 .list-source { margin-top: var(--sp-lg); font-size: 0.82rem; }

@@ -30,7 +30,7 @@
   <!-- Local Fonts: Inter -->
   <link rel="stylesheet" href="fonts/inter/inter.css?v=868d674e" />
 
-  <link rel="stylesheet" href="style.css?v=f51c567e" />
+  <link rel="stylesheet" href="style.css?v=a52764ab" />
   <link rel="canonical" href="https://eclipse.stormberry.as/" />
   
   <meta property="og:title" content="EclipseTracker | Every Solar and Lunar Eclipse to 2100" />
@@ -122,6 +122,17 @@
       <p class="list-count" id="list-count" role="status"></p>
       <div id="eclipse-list" class="eclipse-list"></div>
       <p class="list-source">Source: Fred Espenak, NASA Goddard Space Flight Center, eclipse catalogue and decade tables at eclipse.gsfc.nasa.gov. Times are rounded to the minute. Even for the next few years they may be a minute out, because the catalogue's estimate of the Earth's rotation differs by a few seconds from what has been measured since; for eclipses decades away the difference can grow to a few minutes.</p>
+    </section>
+
+    <!-- ANDROID APP: links to the store listings (2026-10-30). data-web-only: the bridge script
+         that only the Android app loads hides this section inside the app. Do not name that
+         script's file here: the APK build refuses an index.html that already mentions it. -->
+    <section class="android-app" id="android-app" aria-labelledby="android-app-title" data-web-only>
+      <p><strong id="android-app-title">Android app</strong>: the same eclipse list and countdown on your phone, with a calendar file for each eclipse. No internet access.</p>
+      <div class="store-links">
+        <a class="btn btn-secondary" href="https://zapstore.dev/apps/no.stormberry.eclipsetracker" target="_blank" rel="noopener">Get the Android app on Zapstore<span class="sr-only"> (opens in a new tab)</span></a>
+        <a class="btn btn-secondary" href="https://play.google.com/store/apps/details?id=no.stormberry.eclipsetracker.play" target="_blank" rel="noopener">Get the Android app on Google Play<span class="sr-only"> (opens in a new tab)</span></a>
+      </div>
     </section>
   </main>
 
