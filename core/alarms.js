@@ -1,27 +1,34 @@
-import { greatestMinute } from './format.js?v=be22d0d5';
+import { greatestMinute } from './format.js?v=635b29f8';
 import { addDays, isKnownZone, isWallTime, localDateTime, offsetMinutes, wallTimeToInstant } from './zoned.js?v=d3e47120';
 export const MAX_ALARMS = 8;
 export const DEFAULT_TIME = '12:00';
 export const DEFAULT_SPEC = { kind: 'day', daysBefore: 0, time: DEFAULT_TIME };
+export function defaultSpecAt(anchor, zone) {
+    return localDateTime(zone, anchor).time < DEFAULT_TIME
+        ? { kind: 'day', daysBefore: 1, time: DEFAULT_TIME }
+        : { kind: 'day', daysBefore: 0, time: DEFAULT_TIME };
+}
 export const DAYS_BEFORE = [0, 1, 2, 3, 7];
 export const MINUTES_BEFORE = [15, 30, 60, 120];
 export const RECORD_GRACE_MS = 48 * 3600000;
 const MINUTE = 60000;
 const RECORD_ID = /^[0-9a-f]{32}$/;
 const ECLIPSE_ID = /^\d{4}-\d{2}-\d{2}-(solar|lunar)$/;
-export function fireInstant(e, spec, zone) {
-    const greatest = greatestMinute(e);
+export function fireInstantAt(anchor, spec, zone) {
     if (spec.kind === 'before')
-        return { epochMs: greatest - spec.minutes * MINUTE, dst: 'none' };
-    const day = localDateTime(zone, greatest).date;
+        return { epochMs: anchor - spec.minutes * MINUTE, dst: 'none' };
+    const day = localDateTime(zone, anchor).date;
     return wallTimeToInstant(zone, addDays(day, -spec.daysBefore), spec.time);
 }
-export function planAlarm(e, spec, zone, now) {
+export function fireInstant(e, spec, zone) {
+    return fireInstantAt(greatestMinute(e), spec, zone);
+}
+export function planAlarmAt(anchor, spec, zone, now) {
     if (!isValidSpec(spec))
         throw new RangeError(`not an alarm: ${JSON.stringify(spec)}`);
     if (!isKnownZone(zone))
         throw new RangeError(`unknown time zone: ${zone}`);
-    const { epochMs, dst } = fireInstant(e, spec, zone);
+    const { epochMs, dst } = fireInstantAt(anchor, spec, zone);
     const local = localDateTime(zone, epochMs);
     return {
         spec,
@@ -30,16 +37,19 @@ export function planAlarm(e, spec, zone, now) {
         localTime: local.time,
         offsetMinutes: offsetMinutes(zone, epochMs),
         status: epochMs > now ? 'ok' : 'past',
-        afterGreatest: epochMs > greatestMinute(e),
+        afterGreatest: epochMs > anchor,
         dst,
     };
 }
-export function planAlarms(e, specs, zone, now) {
+export function planAlarm(e, spec, zone, now) {
+    return planAlarmAt(greatestMinute(e), spec, zone, now);
+}
+export function planAlarmsAt(anchor, specs, zone, now) {
     if (specs.length > MAX_ALARMS)
         throw new RangeError(`at most ${MAX_ALARMS} alarms per eclipse, not ${specs.length}`);
     const seen = new Set();
     return specs.map((spec) => {
-        const p = planAlarm(e, spec, zone, now);
+        const p = planAlarmAt(anchor, spec, zone, now);
         if (p.status !== 'ok')
             return p;
         if (seen.has(p.fireAt))
@@ -47,6 +57,9 @@ export function planAlarms(e, specs, zone, now) {
         seen.add(p.fireAt);
         return p;
     });
+}
+export function planAlarms(e, specs, zone, now) {
+    return planAlarmsAt(greatestMinute(e), specs, zone, now);
 }
 export function ringing(planned) {
     return planned.filter((p) => p.status === 'ok').sort((a, b) => a.fireAt - b.fireAt);

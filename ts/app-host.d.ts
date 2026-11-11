@@ -15,12 +15,21 @@ import type { AlarmSpec, Eclipse, PlannerRow } from './core/types.js';
  *               with them instead of the default
  *   saveFile    Save through Android's save screen; resolves true once the file is written
  *   attach      called once at start with what the page lets the app do (AppPage)
+ *   cities      true when the app offers the city chooser (city filter, 11 November 2026). A build
+ *               sets it only together with ringing alarms that count from the city's start (the
+ *               proposal in BUILD-REPORT.md); the page keeps the chooser hidden otherwise
+ *   loadCity    the kept city's text (core/citysearch storedCityText), or null; the app keeps it in
+ *               its own preferences, because the WebView's DOM storage stays off
+ *   saveCity    keeps that text, or forgets the city for null; resolves true once done
  */
 export interface AppHost {
   readonly travelNote?: string;
   rowsFor(eclipseId: string): Promise<readonly PlannerRow[]>;
   saveFile(name: string, text: string): Promise<boolean>;
   attach(page: AppPage): void;
+  readonly cities?: boolean;
+  loadCity?(): Promise<string | null>;
+  saveCity?(text: string | null): Promise<boolean>;
 }
 
 /** What the page lets the app's bridge script do. No words: the script has its own. */

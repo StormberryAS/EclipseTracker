@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  DEFAULT_SPEC, DEFAULT_TIME, MAX_ALARMS, RECORD_GRACE_MS, choiceOf, isRecordId, isValidRecord, isValidRecordSet, isValidSpec, nextNewSpec, planAlarm, planAlarms,
+  DEFAULT_SPEC, DEFAULT_TIME, MAX_ALARMS, defaultSpecAt, RECORD_GRACE_MS, choiceOf, fireInstantAt, isRecordId, isValidRecord, isValidRecordSet, isValidSpec, nextNewSpec, planAlarm, planAlarmAt, planAlarms, planAlarmsAt,
   recordFate, recordsFromRows, ringing, rowsFromRecords, specForChoice,
 } from '#core/alarms.js';
 import { ECLIPSES } from '#core/data.js';
@@ -107,6 +107,32 @@ test('the default alarm is on the day of the eclipse at 12:00 (Marcos, 2026-10-1
   assert.equal(DEFAULT_TIME, '12:00');
   assert.deepEqual(DEFAULT_SPEC, { kind: 'day', daysBefore: 0, time: '12:00' });
   assert.equal(MAX_ALARMS, 8);
+});
+
+test('with a city the default alarm is the day before at 12:00 when the eclipse starts before 12:00 local time, else the day itself (Marcos, 2026-11-11)', () => {
+  const day0 = { kind: 'day', daysBefore: 0, time: '12:00' };
+  const day1 = { kind: 'day', daysBefore: 1, time: '12:00' };
+  // Sydney, eclipse 2027-07-18: the penumbral start is Monday 19 July at 01:57 local time (UTC+10), 15:57 UTC on 18 July.
+  const night = Date.parse('2027-07-18T15:57:00Z');
+  assert.deepEqual(defaultSpecAt(night, 'Australia/Sydney'), day1);
+  assert.deepEqual(defaultSpecAt(Date.parse('2027-07-18T01:57:00Z'), 'Australia/Sydney'), day1, '11:57 local');
+  assert.deepEqual(defaultSpecAt(Date.parse('2027-07-18T02:00:00Z'), 'Australia/Sydney'), day0, '12:00 local');
+  // The edges: 11:59 is before noon, 12:00 and 12:01 are not; 00:00 is before noon.
+  assert.deepEqual(defaultSpecAt(Date.parse('2027-03-10T10:59:00Z'), 'Europe/Oslo'), day1, '11:59 in Oslo');
+  assert.deepEqual(defaultSpecAt(Date.parse('2027-03-10T11:00:00Z'), 'Europe/Oslo'), day0, '12:00 in Oslo');
+  assert.deepEqual(defaultSpecAt(Date.parse('2027-03-10T11:01:00Z'), 'Europe/Oslo'), day0, '12:01 in Oslo');
+  assert.deepEqual(defaultSpecAt(Date.parse('2027-03-09T23:00:00Z'), 'Europe/Oslo'), day1, '00:00 in Oslo');
+  // The zone decides, not the device: the same minute is the night in Oslo and the afternoon in Sydney.
+  const same = Date.parse('2027-03-10T05:00:00Z');
+  assert.deepEqual(defaultSpecAt(same, 'Europe/Oslo'), day1, '06:00 in Oslo');
+  assert.deepEqual(defaultSpecAt(same, 'Australia/Sydney'), day0, '16:00 in Sydney');
+  // A new object each time, and the plain default is untouched.
+  assert.notEqual(defaultSpecAt(night, 'Australia/Sydney'), defaultSpecAt(night, 'Australia/Sydney'));
+  assert.deepEqual(DEFAULT_SPEC, day0);
+  // The day-before alarm rings before the start, so it needs no "after the start" warning.
+  const planned = planAlarmAt(night, defaultSpecAt(night, 'Australia/Sydney'), 'Australia/Sydney', Date.parse('2027-01-01T00:00:00Z'));
+  assert.equal(new Date(planned.fireAt).toISOString(), '2027-07-18T02:00:00.000Z', 'Sunday 18 July 2027 at 12:00 in Sydney');
+  assert.equal(planned.afterGreatest, false);
 });
 
 test('every real eclipse plans every option in five zones without throwing, and before-alarms come before greatest eclipse', () => {
@@ -213,4 +239,40 @@ test('changing the option keeps what still applies', () => {
   assert.deepEqual(specForChoice('day-1', { kind: 'before', minutes: 15 }, '09:00'), { kind: 'day', daysBefore: 1, time: '09:00' });
   assert.equal(choiceOf({ kind: 'before', minutes: 15 }), 'before');
   assert.throws(() => specForChoice('day-5', day), RangeError);
+});
+
+// ==== Counted from an anchor minute (city filter, 11 November 2026) ===========================
+
+test('planAlarmsAt from greatest eclipse is exactly planAlarms, for every alarm vector', () => {
+  for (const c of vectors.cases) {
+    const anchor = greatestMinute({ greatest: c.greatest });
+    assert.deepEqual(planAlarmsAt(anchor, c.specs, c.zone, Date.parse(c.now)), planAlarms({ greatest: c.greatest }, c.specs, c.zone, Date.parse(c.now)), c.name);
+  }
+  const e = defined(ECLIPSES[0], 'the first eclipse');
+  const spec: AlarmSpec = { kind: 'day', daysBefore: 2, time: '08:30' };
+  assert.deepEqual(planAlarmAt(greatestMinute(e), spec, 'Europe/Oslo', 0), planAlarm(e, spec, 'Europe/Oslo', 0));
+});
+
+test('with a city: "before" counts from the anchor, and a day alarm uses the date of the anchor in the city\'s zone', () => {
+  // An eclipse that starts at 23:30 UTC on 1 August is already 2 August in Sydney (UTC+10) and still 1 August in Honolulu (UTC-10).
+  const anchor = Date.parse('2027-08-01T23:30:00Z');
+  const before = fireInstantAt(anchor, { kind: 'before', minutes: 60 }, 'Australia/Sydney');
+  assert.equal(new Date(before.epochMs).toISOString(), '2027-08-01T22:30:00.000Z');
+  const sydney = fireInstantAt(anchor, { kind: 'day', daysBefore: 0, time: '12:00' }, 'Australia/Sydney');
+  assert.equal(new Date(sydney.epochMs).toISOString(), '2027-08-02T02:00:00.000Z'); // 12:00 on 2 August, UTC+10
+  const honolulu = fireInstantAt(anchor, { kind: 'day', daysBefore: 0, time: '12:00' }, 'Pacific/Honolulu');
+  assert.equal(new Date(honolulu.epochMs).toISOString(), '2027-08-01T22:00:00.000Z'); // 12:00 on 1 August, UTC-10
+  const week = fireInstantAt(anchor, { kind: 'day', daysBefore: 7, time: '08:30' }, 'Australia/Sydney');
+  assert.equal(new Date(week.epochMs).toISOString(), '2027-07-25T22:30:00.000Z'); // 08:30 on 26 July
+});
+
+test('with a city: an alarm after the anchor is flagged, a duplicate is found, and a passed one is past', () => {
+  const anchor = Date.parse('2027-08-02T08:33:00Z');
+  const specs: AlarmSpec[] = [{ kind: 'day', daysBefore: 0, time: '12:00' }, { kind: 'before', minutes: 30 }, { kind: 'before', minutes: 30 }];
+  const planned = planAlarmsAt(anchor, specs, 'Africa/Cairo', Date.parse('2027-08-02T08:00:00Z'));
+  assert.equal(planned[0]?.afterGreatest, true);
+  assert.equal(planned[1]?.status, 'ok');
+  assert.equal(planned[2]?.status, 'duplicate');
+  assert.equal(planAlarmAt(anchor, { kind: 'before', minutes: 15 }, 'UTC', Date.parse('2027-08-02T08:30:00Z')).status, 'past');
+  assert.throws(() => planAlarmAt(anchor, DEFAULT_SPEC, 'Mars/Olympus', 0), RangeError);
 });

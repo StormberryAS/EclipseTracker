@@ -14,6 +14,9 @@
 #   * a hand edit to the Android bridge script's compiled android-bridge.js (17 October 2026)
 #   * a type error in android/web-overlay/android-bridge.ts (17 October 2026)
 #   * a type error in a test (17 October 2026)
+#   * the city filter (11 November 2026): a stray .js still fails although cities.js (the one generated
+#     file allowed beside app.js) is present; a header edit to cities.js; a hand edit to
+#     ts/core/elements.ts; a hand edit to tests/local-vectors.json; a changed NASA element file
 # and the untouched copy, expected to PASS. Prints one line per case; exits 1 on any surprise.
 set -euo pipefail
 
@@ -52,8 +55,29 @@ expect fail "a stray core/stray.js" "core/stray.js is compiled JavaScript that n
 rm "$copy/core/stray.js"
 
 echo 'export const old = 1;' > "$copy/old-app.js"
-expect fail "a stray old-app.js beside app.js" "old-app.js is compiled JavaScript that no ts/ source compiles to"
+expect fail "a stray old-app.js beside app.js, with cities.js present" "old-app.js is compiled JavaScript that no ts/ source compiles to"
 rm "$copy/old-app.js"
+test -f "$copy/cities.js" || { echo "FAIL the copy has no cities.js"; fails=1; }
+
+cp "$copy/cities.js" "$work/cities.js"
+sed -i '2s/.*/\/\/ edited by hand/' "$copy/cities.js"
+expect fail "a header edit to cities.js" "does not start with the two GENERATED FILE header lines"
+cp "$work/cities.js" "$copy/cities.js"
+
+cp "$copy/ts/core/elements.ts" "$work/elements.ts"
+sed -i "0,/dT: 76\.0/s//dT: 76.1/" "$copy/ts/core/elements.ts"
+expect fail "a hand edit to ts/core/elements.ts" "ts/core/elements.ts is NOT what tools/nasa-elements/ gives"
+cp "$work/elements.ts" "$copy/ts/core/elements.ts"
+
+cp "$copy/tests/local-vectors.json" "$work/local-vectors.json"
+sed -i '0,/"type":"partial"/s//"type":"total"/' "$copy/tests/local-vectors.json"
+expect fail "a hand edit to tests/local-vectors.json" "tests/local-vectors.json is NOT what this script makes"
+cp "$work/local-vectors.json" "$copy/tests/local-vectors.json"
+
+cp "$copy/tools/nasa-elements/JLEX_LE2001.txt" "$work/JLEX.txt"
+sed -i '0,/2451919\.348374/s//2451919.348375/' "$copy/tools/nasa-elements/JLEX_LE2001.txt"
+expect fail "a changed NASA element file" "sha256"
+cp "$work/JLEX.txt" "$copy/tools/nasa-elements/JLEX_LE2001.txt"
 
 cp "$copy/core/ics.js" "$work/ics.js"
 sed -i 's/PT0S/PT0M/' "$copy/core/ics.js"

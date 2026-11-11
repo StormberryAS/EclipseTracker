@@ -17,10 +17,18 @@
 //   * An alarm that has passed or repeats another is left out (alarms.ts).
 //   * Format, as the GDPRLetterBuilder file: CRLF line ends; lines folded at 75 octets counted in
 //     UTF-8, never inside a character; TEXT values escaped (backslash, semicolon, comma, line breaks).
-//   * Never in the file: a name, a place, the time zone or anything else about the person. The UID
-//     is random (from the caller), so two files never collide in a calendar.
+//   * Never in the file: a name, the time zone or anything else about the person. The one thing
+//     that can be in it is the city the person chose from the catalogue (Marcos, 2026-11-11): with
+//     a city, the event is the eclipse as seen from there (see below) and names the city as its
+//     place. The UID is random (from the caller), so two files never collide in a calendar.
+//   * With a city (IcsInput.local) the event starts when the eclipse starts there and ends when it
+//     ends there, both still in UTC (DTSTART:...Z): a TZID would need a VTIMEZONE block, which the
+//     page cannot write without a time-zone rule table. The description gives the same times in
+//     the city's zone, with the offset. The alarm triggers stay durations relative to DTSTART.
+//     Without a city the file is exactly the one above.
 
-import { eclipseName, greatestMinute, magnitudeWords, utcWhen } from './format.js';
+import { coveredWords, eclipseName, greatestMinute, localMagnitude, localName, localNotes, localWhen, magnitudeWords, minuteOf, moonHeightWords, utcWhen } from './format.js';
+import type { Local } from './local.js';
 import type { Eclipse, PlannedAlarm } from './types.js';
 import { MAX_ALARMS, ringing } from './alarms.js';
 
@@ -108,6 +116,43 @@ export function eventDescription(e: Eclipse): string {
   ].join('\n');
 }
 
+/** The eclipse as seen from the city the person chose. */
+export interface IcsLocal {
+  /** "Bergen, Norway": the event's place. */
+  readonly place: string;
+  /** "Bergen": the city's name. */
+  readonly city: string;
+  /** The city's IANA zone, for the times in the description. */
+  readonly zone: string;
+  readonly local: Local;
+}
+
+/** The title of the event seen from a city: "Partial solar eclipse seen from Bergen". */
+export function localTitle(e: Eclipse, l: IcsLocal): string {
+  return `${localName(e.kind, l.local)} seen from ${l.city}`;
+}
+
+/** The description of the event seen from a city, plain text. Times in the city's zone, with the offset. */
+export function localDescription(e: Eclipse, l: IcsLocal): string {
+  const { local, zone } = l;
+  const when = (ms: number): string => localWhen(zone, minuteOf(ms));
+  const maximum = e.kind === 'solar'
+    ? `Maximum ${when(local.max)}, magnitude ${localMagnitude(local)}, ${coveredWords(local)}.`
+    : `Maximum ${when(local.max)}, ${moonHeightWords(local)}.`;
+  return [
+    `${localName(e.kind, local)} seen from ${l.place}. Worldwide: ${eclipseName(e)}.`,
+    `Starts ${when(local.start)}.`,
+    maximum,
+    `Ends ${when(local.end)}.`,
+    ...localNotes(e.kind, local),
+    'Worked out for sea level and a flat, clear horizon.',
+    '',
+    'Times from NASA\'s eclipse catalogue (Fred Espenak, NASA Goddard Space Flight Center), rounded to the minute.',
+    'Local times for a city: Besselian elements and lunar eclipse elements from the Five Millennium Canons (Fred Espenak and Jean Meeus); Eclipse Predictions by Fred Espenak and Chris O\'Byrne (NASA\'s GSFC).',
+    'Made with EclipseTracker by Stormberry AS, eclipse.stormberry.as.',
+  ].join('\n');
+}
+
 export interface IcsInput {
   readonly eclipse: Eclipse;
   /** From planAlarms(): only the alarms with status 'ok' go into the file. */
@@ -116,14 +161,17 @@ export interface IcsInput {
   readonly uid: string;
   /** Now, epoch milliseconds. */
   readonly dtstamp: number;
+  /** The eclipse as seen from the chosen city; absent when no city is chosen. */
+  readonly local?: IcsLocal;
 }
 
 /** The whole calendar file, CRLF line ends, ending in CRLF. */
-export function buildIcs({ eclipse, alarms, uid, dtstamp }: IcsInput): string {
+export function buildIcs({ eclipse, alarms, uid, dtstamp, local }: IcsInput): string {
   if (!/^[0-9a-f]{16,64}$/.test(uid)) throw new RangeError('uid must be 16 to 64 hex digits');
   if (alarms.length > MAX_ALARMS) throw new RangeError(`at most ${MAX_ALARMS} alarms per eclipse, not ${alarms.length}`);
-  const start = greatestMinute(eclipse);
-  const title = eventTitle(eclipse);
+  const start = local ? minuteOf(local.local.start) : greatestMinute(eclipse);
+  const end = local ? Math.max(minuteOf(local.local.end), start + 60_000) : start + EVENT_MINUTES * 60_000;
+  const title = local ? localTitle(eclipse, local) : eventTitle(eclipse);
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -134,9 +182,10 @@ export function buildIcs({ eclipse, alarms, uid, dtstamp }: IcsInput): string {
     `UID:${uid}@eclipse.stormberry.as`,
     `DTSTAMP:${utcStamp(dtstamp)}`,
     `DTSTART:${utcStamp(start)}`,
-    `DTEND:${utcStamp(start + EVENT_MINUTES * 60_000)}`,
+    `DTEND:${utcStamp(end)}`,
     `SUMMARY:${escapeText(title)}`,
-    `DESCRIPTION:${escapeText(eventDescription(eclipse))}`,
+    ...(local ? [`LOCATION:${escapeText(local.place)}`] : []),
+    `DESCRIPTION:${escapeText(local ? localDescription(eclipse, local) : eventDescription(eclipse))}`,
     'TRANSP:TRANSPARENT',
   ];
   for (const a of ringing(alarms)) {

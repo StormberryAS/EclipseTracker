@@ -36,6 +36,18 @@ export const DEFAULT_TIME = '12:00';
 /** The alarm a new planner starts with: on the day of the eclipse at 12:00. */
 export const DEFAULT_SPEC: AlarmSpec = { kind: 'day', daysBefore: 0, time: DEFAULT_TIME };
 
+/**
+ * The alarm a new planner starts with when a city is chosen (Marcos, 2026-11-11): on the day at
+ * 12:00, as without a city, unless the eclipse starts at the city before 12:00 local time. The
+ * 12:00 of that day would then ring after the start, so the default is the day before at 12:00.
+ * `anchor` is the minute the eclipse starts at the city, and `zone` the city's time zone.
+ */
+export function defaultSpecAt(anchor: number, zone: string): AlarmSpec {
+  return localDateTime(zone, anchor).time < DEFAULT_TIME
+    ? { kind: 'day', daysBefore: 1, time: DEFAULT_TIME }
+    : { kind: 'day', daysBefore: 0, time: DEFAULT_TIME };
+}
+
 export const DAYS_BEFORE: readonly DaysBefore[] = [0, 1, 2, 3, 7];
 export const MINUTES_BEFORE: readonly MinutesBefore[] = [15, 30, 60, 120];
 
@@ -51,19 +63,32 @@ const MINUTE = 60_000;
 const RECORD_ID = /^[0-9a-f]{32}$/;
 const ECLIPSE_ID = /^\d{4}-\d{2}-\d{2}-(solar|lunar)$/;
 
-/** The instant an alarm rings, and how a clock change was resolved, before any status is decided. */
-export function fireInstant(e: Pick<Eclipse, 'greatest'>, spec: AlarmSpec, zone: string): { epochMs: number; dst: PlannedAlarm['dst'] } {
-  const greatest = greatestMinute(e);
-  if (spec.kind === 'before') return { epochMs: greatest - spec.minutes * MINUTE, dst: 'none' };
-  const day = localDateTime(zone, greatest).date;
+/**
+ * The instant an alarm rings, and how a clock change was resolved, before any status is decided.
+ * `anchor` is the minute the alarms count from: greatest eclipse (rounded to the minute) as the
+ * list shows it, or, with a city chosen, the minute the eclipse starts there. "Before" is minutes
+ * before the anchor; "at a time of day" is that wall time in `zone`, on the local date of the
+ * anchor in that zone minus the days chosen.
+ */
+export function fireInstantAt(anchor: number, spec: AlarmSpec, zone: string): { epochMs: number; dst: PlannedAlarm['dst'] } {
+  if (spec.kind === 'before') return { epochMs: anchor - spec.minutes * MINUTE, dst: 'none' };
+  const day = localDateTime(zone, anchor).date;
   return wallTimeToInstant(zone, addDays(day, -spec.daysBefore), spec.time);
 }
 
-/** One alarm, planned. Its status is 'ok' or 'past'; planAlarms() also finds duplicates. */
-export function planAlarm(e: Pick<Eclipse, 'greatest'>, spec: AlarmSpec, zone: string, now: number): PlannedAlarm {
+/** The instant an alarm rings for an eclipse, counted from greatest eclipse. */
+export function fireInstant(e: Pick<Eclipse, 'greatest'>, spec: AlarmSpec, zone: string): { epochMs: number; dst: PlannedAlarm['dst'] } {
+  return fireInstantAt(greatestMinute(e), spec, zone);
+}
+
+/**
+ * One alarm, planned from an anchor minute. Its status is 'ok' or 'past'; planAlarmsAt() also finds
+ * duplicates. `afterGreatest` keeps its name for the stage B contract; it means "after the anchor".
+ */
+export function planAlarmAt(anchor: number, spec: AlarmSpec, zone: string, now: number): PlannedAlarm {
   if (!isValidSpec(spec)) throw new RangeError(`not an alarm: ${JSON.stringify(spec)}`);
   if (!isKnownZone(zone)) throw new RangeError(`unknown time zone: ${zone}`);
-  const { epochMs, dst } = fireInstant(e, spec, zone);
+  const { epochMs, dst } = fireInstantAt(anchor, spec, zone);
   const local = localDateTime(zone, epochMs);
   return {
     spec,
@@ -72,25 +97,38 @@ export function planAlarm(e: Pick<Eclipse, 'greatest'>, spec: AlarmSpec, zone: s
     localTime: local.time,
     offsetMinutes: offsetMinutes(zone, epochMs),
     status: epochMs > now ? 'ok' : 'past',
-    afterGreatest: epochMs > greatestMinute(e),
+    afterGreatest: epochMs > anchor,
     dst,
   };
 }
 
+/** One alarm, planned from greatest eclipse. */
+export function planAlarm(e: Pick<Eclipse, 'greatest'>, spec: AlarmSpec, zone: string, now: number): PlannedAlarm {
+  return planAlarmAt(greatestMinute(e), spec, zone, now);
+}
+
 /**
- * Several alarms for one eclipse, in the order given; a later alarm at the same minute as an
- * earlier one is a duplicate. More than MAX_ALARMS is refused.
+ * Several alarms counted from one anchor minute, in the order given; a later alarm at the same
+ * minute as an earlier one is a duplicate. More than MAX_ALARMS is refused.
  */
-export function planAlarms(e: Pick<Eclipse, 'greatest'>, specs: readonly AlarmSpec[], zone: string, now: number): PlannedAlarm[] {
+export function planAlarmsAt(anchor: number, specs: readonly AlarmSpec[], zone: string, now: number): PlannedAlarm[] {
   if (specs.length > MAX_ALARMS) throw new RangeError(`at most ${MAX_ALARMS} alarms per eclipse, not ${specs.length}`);
   const seen = new Set<number>();
   return specs.map((spec) => {
-    const p = planAlarm(e, spec, zone, now);
+    const p = planAlarmAt(anchor, spec, zone, now);
     if (p.status !== 'ok') return p;
     if (seen.has(p.fireAt)) return { ...p, status: 'duplicate' };
     seen.add(p.fireAt);
     return p;
   });
+}
+
+/**
+ * Several alarms for one eclipse, counted from greatest eclipse, in the order given; a later alarm
+ * at the same minute as an earlier one is a duplicate. More than MAX_ALARMS is refused.
+ */
+export function planAlarms(e: Pick<Eclipse, 'greatest'>, specs: readonly AlarmSpec[], zone: string, now: number): PlannedAlarm[] {
+  return planAlarmsAt(greatestMinute(e), specs, zone, now);
 }
 
 /** The alarms that will ring, in the order they ring. */

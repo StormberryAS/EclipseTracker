@@ -16,3 +16,17 @@
 # The test vectors for stage B's Kotlin port, written by tools/vectors/build-vectors.py.
 /tests/record-vectors.json linguist-generated=true
 /tests/dst-vectors.json linguist-generated=true
+# ts/core/elements.ts is written by tools/build-local-elements.py from the NASA element files in
+# tools/nasa-elements/ (vendored byte for byte, with .txt names so that no JavaScript is tracked).
+/ts/core/elements.ts linguist-generated=true
+/tools/nasa-elements/** linguist-vendored=true
+# cities.js is the shared Labs city catalogue, written by SunApp's update_cities.py into every app
+# with a city picker (EclipseTracker since 2026-11-11). Copied byte for byte; never edit it here.
+/cities.js linguist-generated=true
+# The city search vectors, captured by MoonApp's tests/capture-search.ts from the MoonApp 90d11dd
+# page and copied byte for byte; tests/citysearch.test.ts replays them against core/citysearch.js.
+/tests/search-vectors.json linguist-generated=true
+# The local-circumstance vectors, written by tools/vectors/build-local-vectors.py (a separate
+# Python implementation of the method in ts/core/local.ts; it shares the element parser and the T0 rule
+# with tools/build-local-elements.py); tests/local.test.ts replays them.
+/tests/local-vectors.json linguist-generated=true

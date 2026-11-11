@@ -19,7 +19,11 @@
 // list; the end of the list after 2100; a southern zone; no sideways scroll at 1280, 390 and 320 px,
 // with text at 100% and 200%, in the dark theme, the planner open and closed, every select showing
 // every option whole (K-2); and the page text in
-// the house style. Prints one line per check and exits 1 on the first failure.
+// the house style; and the city filter (11 November 2026): the catalogue is requested only when the
+// chooser is used, Bergen picked by keyboard, kept in localStorage and restored without the
+// catalogue, cleared, storage that throws, a catalogue that does not load, a city in another zone,
+// the planner and the saved file for a city, 400 px with 200% text, Escape and Tab in the list.
+// Prints one line per check and exits 1 on the first failure.
 
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
@@ -29,8 +33,11 @@ import assert from 'node:assert/strict';
 import { launchChromium, openPage, selectsCut, sleep } from './cdp.ts';
 import type { FromBrowser, Page, PageOptions } from './cdp.ts';
 import { planAlarms } from '#core/alarms.js';
-import { eclipseById } from '#core/eclipses.js';
+import { ECLIPSES, eclipseById } from '#core/eclipses.js';
+import { localName, localWhen, minuteOf } from '#core/format.js';
 import { buildIcs } from '#core/ics.js';
+import { localAll } from '#core/local.js';
+import { localDateTime } from '#core/zoned.js';
 import type { AlarmSpec } from '#core/types.js';
 import { defined, group } from './helpers.ts';
 
@@ -208,7 +215,8 @@ await check('the planner opens from the list with the default alarm, focus insid
 
 await check('one live region in the planner; each result line is its controls\' description and is read out only when that alarm changes', async () => {
   const live = await p.ev(LIVE);
-  assert.deepEqual(live, ['list-count', 'planner-live'], 'one live region on the page and one in the planner');
+  // The city chooser's status line (11 November 2026) is the third live region on the page; it is quiet until the chooser is used.
+  assert.deepEqual(live, ['city-status', 'list-count', 'planner-live'], 'the chooser\'s status line, the list count, and one in the planner');
   assert.equal(await p.ev("document.querySelectorAll('#planner [aria-live], #planner [role=status]').length"), 1);
   assert.equal(await p.ev("document.querySelector('.alarm-result').getAttribute('aria-live')"), null);
   assert.deepEqual(await p.ev("[...document.querySelectorAll('#alarm-rows .alarm-row:first-child select, #alarm-rows .alarm-row:first-child input')].map((n) => n.getAttribute('aria-describedby'))"),
@@ -471,6 +479,7 @@ await check('with the planner open, an alarm passes at the minute and shows as p
 await check('after the last eclipse in the list (2100): the countdown and the list say so, nothing is empty (code review C-19)', async () => {
   const d = await open({ width: 390, height: 800 }, Date.parse('2100-09-05T00:00:00Z'));
   assert.equal(await d.ev("document.getElementById('eclipse-type').textContent"), 'No more eclipses in the list');
+  assert.equal(await d.ev("document.getElementById('countdown-to').hidden"), true, 'no label for a countdown that counts to nothing');
   assert.equal(await digits(d), '00:00:00:00');
   assert.equal(await d.ev("document.getElementById('countdown-words').textContent"), 'No more eclipses in the list.');
   assert.equal(await d.ev("document.getElementById('event-details').hidden"), true, 'no empty date, region or type');
@@ -486,6 +495,401 @@ await check('after the last eclipse in the list (2100): the countdown and the li
   assert.equal(await one.ev("document.getElementById('list-count').textContent"), 'No eclipse of this kind and type is left in the list.');
   assert.deepEqual(one.log.errors, []);
   await one.close();
+});
+
+// ==== The city filter (11 November 2026) =========================================================
+// Expectations come from core/local.js (which tests/local.test.ts checks against a separate
+// Python implementation); the page is checked for using them: the list, the countdown, the zone, the file.
+
+const CITY_KEY = 'eclipsetracker.city';
+const BERGEN_TEXT = '{"v":1,"name":"Bergen","country":"Norway","lat":60.393,"lon":5.3242,"tz":"Europe/Oslo"}';
+const SYDNEY = { lat: -33.8678, lon: 151.2073 };
+
+/** What the page must show for a city with the frozen clock: the eclipses still to start, in order. */
+function expectFor(point: { lat: number; lon: number }, zone: string) {
+  const locals = localAll(point);
+  const list = ECLIPSES.filter((e) => locals.has(e.id)).filter((e) => minuteOf(defined(locals.get(e.id), e.id).start) > NOW);
+  const first = defined(list[0], 'a first eclipse');
+  const local = defined(locals.get(first.id), first.id);
+  const years = new Set(list.map((e) => localDateTime(zone, minuteOf(defined(locals.get(e.id), e.id).start)).date.slice(0, 4)));
+  return { list, first, local, start: minuteOf(local.start), years: years.size };
+}
+const bergen = expectFor({ lat: 60.393, lon: 5.3242 }, 'Europe/Oslo');
+const openedList = (c: Page): Promise<boolean> => c.waitFor("document.querySelectorAll('#city-dropdown li').length > 0");
+const catalogueRequests = (c: Page): number => c.log.requests.filter((r) => r.url.includes('cities.js')).length;
+/** Types a name into the chooser and picks the first suggestion with the keyboard, as a person does. */
+async function pickFirst(c: Page, typed: string): Promise<void> {
+  await c.type('#city-search', typed);
+  assert.ok(await openedList(c), `suggestions for ${typed}`);
+  await c.key('ArrowDown');
+  await c.key('Enter');
+  await sleep(150);
+}
+const text = (c: Page, id: string): Promise<string> => c.ev(`document.getElementById(${J(id)}).textContent`);
+
+await check('B1 no city: the page as before, the label says what it counts to, the catalogue is not requested, nothing is stored', async () => {
+  const p = await open({ width: 1280, height: 900 });
+  assert.equal(await text(p, 'countdown-to'), 'Greatest eclipse in');
+  assert.equal(await text(p, 'countdown-eyebrow'), 'Next eclipse');
+  assert.equal(await text(p, 'eclipse-date-label'), 'Date');
+  assert.deepEqual(await p.ev("['eclipse-max-row', 'eclipse-end-row', 'eclipse-seen-row'].map((id) => document.getElementById(id).hidden)"), [true, true, true]);
+  assert.equal(await p.ev("document.getElementById('city-card').hidden"), false);
+  assert.equal(await p.ev("document.getElementById('city-selected').hidden"), true);
+  assert.equal(catalogueRequests(p), 0, 'cities.js is not requested before the chooser is used');
+  assert.equal(await p.ev("'CITIES' in globalThis"), false);
+  assert.equal(await p.ev('localStorage.length + sessionStorage.length'), 0);
+  assert.equal(await text(p, 'city-privacy'), 'EclipseTracker remembers your city in this browser only and sends it nowhere. Clear it with the Clear city button.');
+  assert.equal(await p.ev("document.getElementById('city-search').getAttribute('role')"), 'combobox');
+  assert.equal(await p.ev("document.getElementById('city-search').getAttribute('aria-expanded')"), 'false');
+  assert.equal(await text(p, 'list-count'), '337 eclipses in 74 years.');
+  assert.deepEqual(p.log.errors, []);
+  await p.close();
+});
+
+const downloadsCity = join(work, 'downloads-city');
+mkdirSync(downloadsCity, { recursive: true });
+const c = await open({ width: 1280, height: 900, downloads: downloadsCity });
+
+await check('B2 the chooser: the first use requests cities.js once, with its stamp, and no error or policy report', async () => {
+  assert.equal(catalogueRequests(c), 0);
+  await c.click('#city-search');
+  assert.ok(await c.waitFor("'CITIES' in globalThis"), 'the catalogue script ran');
+  await sleep(200);
+  const asked = c.log.requests.filter((r) => r.url.includes('cities.js')).map((r) => new URL(r.url).pathname + new URL(r.url).search);
+  assert.deepEqual(asked, ['/cities.js?v=2f08782c']);
+  assert.equal(await text(c, 'city-status'), '', 'the loading message is cleared');
+  assert.equal(await c.ev("document.getElementById('city-search').getAttribute('aria-busy')"), null);
+  assert.deepEqual(c.log.errors, []);
+  assert.deepEqual(c.log.csp, []);
+  assert.deepEqual(c.log.offsite, []);
+  await c.ev("document.getElementById('city-search').blur()");
+  await c.click('#city-search');
+  assert.equal(catalogueRequests(c), 1, 'a second use does not ask again');
+});
+
+await check('B3 Bergen by keyboard: the highlighted row is announced, the countdown and the list show only what Bergen sees, the city is kept', async () => {
+  await c.type('#city-search', 'bergen');
+  assert.ok(await openedList(c));
+  assert.equal(await c.ev("document.getElementById('city-search').getAttribute('aria-expanded')"), 'true');
+  assert.equal(await c.ev("document.querySelectorAll('#city-dropdown li').length"), 8);
+  assert.deepEqual(await c.ev("[...document.querySelectorAll('#city-dropdown li')].slice(0, 2).map((li) => li.textContent)"), ['BergenNorway', 'BergenThe Netherlands']);
+  await sleep(500);
+  assert.equal(await text(c, 'city-status'), '8 suggestions.');
+  await c.key('ArrowDown');
+  assert.equal(await c.ev("document.getElementById('city-search').getAttribute('aria-activedescendant')"), 'city-option-0');
+  assert.deepEqual(await c.ev("[...document.querySelectorAll('#city-dropdown li')].map((li) => li.getAttribute('aria-selected'))"), ['true', 'false', 'false', 'false', 'false', 'false', 'false', 'false']);
+  await c.key('Enter');
+  await sleep(150);
+  assert.equal(await text(c, 'city-selected-text'), 'Bergen, Norway');
+  assert.equal(await c.ev("document.getElementById('city-search').value"), '');
+  assert.equal(await text(c, 'city-status'), 'Showing eclipses seen from Bergen, Norway.');
+  assert.equal(await text(c, 'countdown-eyebrow'), 'Next eclipse seen from Bergen');
+  assert.equal(await text(c, 'countdown-to'), 'Starts in');
+  assert.equal(await text(c, 'eclipse-type'), localName(bergen.first.kind, bergen.local));
+  assert.equal(await text(c, 'eclipse-date-label'), 'Starts');
+  assert.equal(await text(c, 'eclipse-date'), localWhen('Europe/Oslo', bergen.start));
+  assert.match(await text(c, 'countdown-words'), /^Starts in \d+ days?, /);
+  assert.equal(await c.ev("['eclipse-max-row', 'eclipse-end-row', 'eclipse-seen-row'].map((id) => document.getElementById(id).hidden).join()"), 'false,false,false');
+  assert.equal(await text(c, 'list-count'), `${bergen.list.length} eclipses seen from Bergen in ${bergen.years} years.`);
+  assert.equal(await c.ev("document.querySelector('.eclipse-item').dataset.id"), bergen.first.id);
+  assert.match(await text(c, 'list-intro'), /^Eclipses that can be seen from Bergen, from NASA's eclipse catalogue, with the time each starts there in that city's time zone\./);
+  assert.equal(await c.ev('localStorage.getItem(' + J(CITY_KEY) + ')'), BERGEN_TEXT);
+  assert.match(await c.ev("document.querySelector('.eclipse-item .eclipse-local').textContent"), /^Seen from Bergen: /);
+  assert.match(await c.ev("document.querySelector('.eclipse-item .eclipse-when').textContent"), /^Starts \w{3} \d+ \w{3} 20\d\d, \d\d:\d\d \(UTC\+[12]\)$/);
+  const countdown = await digits(c);
+  const [d = 0, h = 0, m = 0] = countdown.split(':').map(Number);
+  const left = bergen.start - NOW;
+  assert.ok(Math.abs((d * 86400 + h * 3600 + m * 60) * 1000 - left) < 120_000, `the digits ${countdown} count to ${new Date(bergen.start).toISOString()}`);
+  assert.deepEqual(c.log.errors, []);
+});
+
+await check('B4 reload: the city is restored, with no request for cities.js, the same countdown and list', async () => {
+  c.log.requests.splice(0);
+  await c.load();
+  assert.equal(catalogueRequests(c), 0);
+  assert.equal(await c.ev("'CITIES' in globalThis"), false);
+  assert.equal(await text(c, 'city-selected-text'), 'Bergen, Norway');
+  assert.equal(await c.ev("document.getElementById('city-selected').hidden"), false);
+  assert.equal(await text(c, 'countdown-to'), 'Starts in');
+  assert.equal(await text(c, 'eclipse-date'), localWhen('Europe/Oslo', bergen.start));
+  assert.equal(await text(c, 'list-count'), `${bergen.list.length} eclipses seen from Bergen in ${bergen.years} years.`);
+  assert.match(await c.ev("document.getElementById('planner-note').textContent"), /EclipseTracker sends nothing; it keeps only the city you chose, in this browser\.$/);
+});
+
+await check('B8 the planner and the saved file for Bergen: the start in its zone, alarms counted from it, the place in the file', async () => {
+  await c.click('#next-alarms');
+  assert.equal(await text(c, 'planner-when'), `Starts in Bergen: ${localWhen('Europe/Oslo', bergen.start)}, which is ${localDateTime('UTC', bergen.start).time} UTC.`);
+  assert.equal(await text(c, 'planner-zone'), 'Times of day are for the time zone of Bergen, Europe/Oslo. The alarms ring at those moments wherever you are, so your calendar can show another hour. Alarms before the start always follow the eclipse.');
+  assert.ok((await c.ev("[...document.querySelectorAll('.alarm-choice option')].map((o) => o.textContent)")).includes('Before the eclipse starts'));
+  await c.click('#save-ics');
+  let done: FromBrowser = null;
+  for (let i = 0; i < 100 && !done; i++) {
+    done = c.log.downloads.find((x) => x.state === 'completed');
+    if (!done) await sleep(50);
+  }
+  assert.ok(done, 'the download completed');
+  const saved = readFileSync(join(downloadsCity, defined(readdirSync(downloadsCity)[0], 'the saved file')), 'utf8');
+  assert.match(saved, /\r\nLOCATION:Bergen\\, Norway\r\n/);
+  const stamp = new Date(bergen.start).toISOString().replace(/[-:]/g, '').replace('.000Z', 'Z');
+  assert.ok(saved.includes(`\r\nDTSTART:${stamp}\r\n`), `DTSTART is the minute the countdown counts to: ${stamp}`);
+  assert.match(saved.replace(/\r\n /g, ''), /SUMMARY:\w+ (solar|lunar) eclipse seen from Bergen\r\n/);
+  await c.key('Escape');
+});
+
+await check('B5 the Clear city button: the city and the stored entry are gone, the page is the page with no city, the status says so, focus is on the search box', async () => {
+  await c.click('#city-clear-btn');
+  assert.equal(await c.ev('localStorage.getItem(' + J(CITY_KEY) + ')'), null);
+  assert.equal(await c.ev("document.getElementById('city-selected').hidden"), true);
+  assert.equal(await text(c, 'countdown-to'), 'Greatest eclipse in');
+  assert.equal(await text(c, 'countdown-eyebrow'), 'Next eclipse');
+  assert.equal(await text(c, 'eclipse-type'), 'Annular solar eclipse');
+  assert.equal(await text(c, 'eclipse-date'), 'Saturday 6 February 2027 at 17:00 (UTC+1)');
+  assert.equal(await text(c, 'list-count'), '337 eclipses in 74 years.');
+  assert.equal(await text(c, 'city-status'), 'Showing every eclipse.');
+  assert.equal(await c.ev('document.activeElement.id'), 'city-search');
+  assert.equal(await c.ev("document.querySelector('.eclipse-local')"), null);
+  assert.match(await c.ev("document.getElementById('planner-note').textContent"), /EclipseTracker sends nothing and keeps nothing\.$/);
+  assert.deepEqual(c.log.errors, []);
+});
+
+await check('B10 Escape and Tab close the list: aria-expanded false, no active descendant', async () => {
+  await c.type('#city-search', 'ber');
+  assert.ok(await openedList(c));
+  await c.key('ArrowDown');
+  assert.equal(await c.ev("document.getElementById('city-search').hasAttribute('aria-activedescendant')"), true);
+  await c.key('Escape');
+  assert.equal(await c.ev("document.getElementById('city-dropdown').hidden"), true);
+  assert.equal(await c.ev("document.getElementById('city-search').getAttribute('aria-expanded')"), 'false');
+  assert.equal(await c.ev("document.getElementById('city-search').hasAttribute('aria-activedescendant')"), false);
+  assert.equal(await c.ev("document.getElementById('city-search').value"), 'ber', 'the first Escape closes the list only; the typed text stays');
+  await c.type('#city-search', 'ber');
+  assert.ok(await openedList(c));
+  await c.key('Tab');
+  assert.equal(await c.ev("document.getElementById('city-dropdown').hidden"), true);
+  assert.equal(await c.ev("document.getElementById('city-search').getAttribute('aria-expanded')"), 'false');
+  assert.equal(await c.ev("document.getElementById('city-search').hasAttribute('aria-activedescendant')"), false);
+  // Typing keeps the chosen city; only a pick or the Clear city button changes it. And nothing is picked by Enter with no row highlighted.
+  await c.type('#city-search', 'tokyo');
+  assert.ok(await openedList(c));
+  await c.key('Enter');
+  assert.equal(await c.ev("document.getElementById('city-selected').hidden"), true, 'no city yet: nothing was highlighted');
+  await sleep(500);
+  assert.match(await text(c, 'city-status'), /suggestion/, 'the count is said once, after the last key');
+  await c.type('#city-search', '');
+  assert.equal(await text(c, 'city-status'), '', 'an emptied box takes the count back and announces nothing');
+  assert.deepEqual(c.log.errors, []);
+  await c.close();
+});
+
+await check('a city in another zone: Sydney\'s times are Sydney\'s, not the device\'s, and the list is grouped by Sydney\'s years', async () => {
+  const y = await open({ width: 1280, height: 900 });
+  await pickFirst(y, 'sydney');
+  const sydney = expectFor(SYDNEY, 'Australia/Sydney');
+  assert.equal(await text(y, 'city-selected-text'), 'Sydney, Australia');
+  assert.equal(await text(y, 'eclipse-date'), localWhen('Australia/Sydney', sydney.start));
+  assert.match(await text(y, 'eclipse-date'), /\(UTC\+(10|11)\)$/);
+  assert.equal(await text(y, 'list-count'), `${sydney.list.length} eclipses seen from Sydney in ${sydney.years} years.`);
+  assert.equal(await y.ev("document.querySelector('.year-group').dataset.year"), localDateTime('Australia/Sydney', sydney.start).date.slice(0, 4));
+  // The kind filter works on the worldwide kind, and the count says so.
+  await setSelect(y, "document.getElementById('filter-kind')", 'solar');
+  assert.match(await text(y, 'list-count'), /^Showing \d+ of \d+ eclipses seen from Sydney, in \d+ years?\.$/);
+  houseStyle(await y.ev('document.body.innerText'), 'page with a city');
+  assert.deepEqual(y.log.errors, []);
+  await y.close();
+});
+
+await check('B6 storage that throws: the page loads, a pick works for the visit, nothing is thrown; a stored value that is not a city is removed', async () => {
+  const KEPT = 'EclipseTracker remembers your city in this browser only and sends it nowhere. Clear it with the Clear city button.';
+  const NOT_KEPT = 'This browser would not let EclipseTracker keep your city, so it is forgotten when you close the page. EclipseTracker sends it nowhere. Clear it with the Clear city button.';
+  const blocked: Array<[string, boolean]> = [
+    ["Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('blocked', 'SecurityError'); } });", true],
+    ["for (const m of ['getItem', 'setItem', 'removeItem', 'clear', 'key']) Storage.prototype[m] = function () { throw new DOMException('blocked', 'QuotaExceededError'); };", true],
+    // Reading works and writing is refused (a full store): the page learns it at the first pick.
+    ["Storage.prototype.setItem = function () { throw new DOMException('full', 'QuotaExceededError'); };", false],
+  ];
+  for (const [script, blockedAtLoad] of blocked) {
+    const b = await openPage(browser, base, { timezone: 'Europe/Oslo', width: 1280, height: 900, init: clockAt(NOW) + script });
+    assert.equal(await b.ev("document.documentElement.dataset.ready"), 'true');
+    assert.equal(await text(b, 'countdown-to'), 'Greatest eclipse in');
+    assert.equal(await text(b, 'city-privacy'), blockedAtLoad ? NOT_KEPT : KEPT);
+    await pickFirst(b, 'bergen');
+    assert.equal(await text(b, 'city-selected-text'), 'Bergen, Norway');
+    assert.equal(await text(b, 'countdown-to'), 'Starts in');
+    assert.equal(await text(b, 'city-privacy'), NOT_KEPT, 'nothing is kept, and the page does not say it remembers');
+    assert.match(await text(b, 'planner-note'), /EclipseTracker sends nothing and keeps nothing\.$/, 'the planner note does not say a city is kept');
+    await b.click('#city-clear-btn');
+    assert.equal(await text(b, 'countdown-to'), 'Greatest eclipse in');
+    assert.deepEqual(b.log.errors, []);
+    await b.close();
+  }
+  const bad = await openPage(browser, base, { timezone: 'Europe/Oslo', width: 1280, height: 900, init: clockAt(NOW) + `localStorage.setItem(${J(CITY_KEY)}, '{"v":1,"name":"Bergen","country":"Norway","lat":91,"lon":5,"tz":"Europe/Oslo"}');` });
+  assert.equal(await text(bad, 'countdown-to'), 'Greatest eclipse in');
+  assert.equal(await bad.ev('localStorage.getItem(' + J(CITY_KEY) + ')'), null, 'the invalid entry was removed');
+  assert.equal(await bad.ev("document.getElementById('city-selected').hidden"), true);
+  await bad.close();
+  // The record of an earlier build, without the version (v: 1), is not a record of this page: it is removed, as MeteorWatch removes one.
+  const unversioned = await openPage(browser, base, { timezone: 'Europe/Oslo', width: 1280, height: 900, init: clockAt(NOW) + `localStorage.setItem(${J(CITY_KEY)}, '{"name":"Bergen","country":"Norway","lat":60.393,"lon":5.3242,"tz":"Europe/Oslo"}');` });
+  assert.equal(await text(unversioned, 'countdown-to'), 'Greatest eclipse in');
+  assert.equal(await unversioned.ev('localStorage.getItem(' + J(CITY_KEY) + ')'), null, 'the record without v was removed');
+  assert.equal(await unversioned.ev("document.getElementById('city-selected').hidden"), true);
+  await unversioned.close();
+  // A well-formed city whose time zone this browser does not know is not used, and is not deleted.
+  const stale = `{"v":1,"name":"Bergen","country":"Norway","lat":60.393,"lon":5.3242,"tz":"Mars/Olympus"}`;
+  const odd = await openPage(browser, base, { timezone: 'Europe/Oslo', width: 1280, height: 900, init: clockAt(NOW) + `localStorage.setItem(${J(CITY_KEY)}, ${J(stale)});` });
+  assert.equal(await text(odd, 'countdown-to'), 'Greatest eclipse in');
+  assert.equal(await odd.ev("document.getElementById('city-selected').hidden"), true);
+  assert.equal(await odd.ev('localStorage.getItem(' + J(CITY_KEY) + ')'), stale, 'kept: a newer browser may know the zone');
+  await odd.close();
+});
+
+await check('B11 a city kept from an earlier visit and cleared with the Clear city button: no request for cities.js, the first typing asks for it once', async () => {
+  const k = await openPage(browser, base, { timezone: 'Europe/Oslo', width: 1280, height: 900, init: clockAt(NOW) + `localStorage.setItem(${J(CITY_KEY)}, ${J(BERGEN_TEXT)});` });
+  assert.equal(await text(k, 'city-selected-text'), 'Bergen, Norway');
+  assert.equal(catalogueRequests(k), 0);
+  await k.click('#city-clear-btn');
+  await sleep(300);
+  assert.equal(await text(k, 'countdown-to'), 'Greatest eclipse in');
+  assert.equal(await text(k, 'city-status'), 'Showing every eclipse.');
+  assert.equal(await k.ev('document.activeElement.id'), 'city-search', 'the focus is on the search box');
+  assert.equal(catalogueRequests(k), 0, 'clearing a city does not download the city list');
+  assert.equal(await k.ev("'CITIES' in globalThis"), false);
+  await k.type('#city-search', 'ber');
+  assert.ok(await openedList(k), 'typing loads the list and shows suggestions');
+  assert.equal(catalogueRequests(k), 1);
+  assert.deepEqual(k.log.errors, []);
+  await k.close();
+});
+
+await check('B12 a bridge that offers cities (the branch the next APK will use): the chooser shows, a pick is handed to saveCity, and a late loadCity answer does not undo the pick', async () => {
+  const fake = (resolveWith: string) => `window.EclipseTrackerApp = { cities: true, rowsFor: () => Promise.resolve([]), saveFile: () => Promise.resolve(true), attach: () => {},
+    saveCity: (t) => { window.__saved = t; return Promise.resolve(true); },
+    loadCity: () => new Promise((r) => { window.__answer = () => r(${J(resolveWith)}); }) };`;
+  const SYDNEY_TEXT = '{"v":1,"name":"Sydney","country":"Australia","lat":-33.8678,"lon":151.2073,"tz":"Australia/Sydney"}';
+  const a = await openPage(browser, base, { timezone: 'Europe/Oslo', width: 1280, height: 900, init: clockAt(NOW) + fake(SYDNEY_TEXT) });
+  assert.equal(await a.ev("document.getElementById('city-card').hidden"), false);
+  assert.equal(await text(a, 'city-privacy'), 'Your city stays on this phone only. Clear it with the Clear city button.');
+  await pickFirst(a, 'bergen');
+  assert.equal(await a.ev('window.__saved'), BERGEN_TEXT, 'the pick went to saveCity');
+  await a.ev('window.__answer()');
+  await sleep(200);
+  assert.equal(await text(a, 'city-selected-text'), 'Bergen, Norway', 'the late answer did not replace the pick');
+  assert.equal(await a.ev('localStorage.length'), 0, 'in the app the page never touches DOM storage');
+  await a.close();
+  // Answered before any pick: the kept city is used.
+  const b = await openPage(browser, base, { timezone: 'Europe/Oslo', width: 1280, height: 900, init: clockAt(NOW) + fake(SYDNEY_TEXT) });
+  await b.ev('window.__answer()');
+  assert.ok(await b.waitFor("document.getElementById('city-selected-text').textContent === 'Sydney, Australia'"));
+  assert.equal(await text(b, 'countdown-to'), 'Starts in');
+  await b.click('#city-clear-btn');
+  assert.equal(await b.ev('window.__saved'), null, 'Clear city hands null to saveCity');
+  assert.deepEqual(b.log.errors, []);
+  await b.close();
+});
+
+await check('B7 the catalogue does not load: the message says so, every eclipse still shows, the next use tries again', async () => {
+  const f = await open({ width: 1280, height: 900 });
+  await f.s('Network.setBlockedURLs', { urls: ['*cities.js*'] });
+  await f.click('#city-search');
+  assert.ok(await f.waitFor("document.getElementById('city-status').textContent.startsWith('The city list did not load')"));
+  assert.equal(await text(f, 'city-status'), 'The city list did not load. Reload the page to try again.');
+  assert.equal(await f.ev("document.getElementById('city-search').getAttribute('aria-busy')"), null);
+  assert.equal(await text(f, 'list-count'), '337 eclipses in 74 years.');
+  assert.equal(await f.ev("document.querySelectorAll('script[src*=\"cities.js\"]').length"), 0, 'the failed script element is removed');
+  assert.deepEqual(f.log.errors.filter((e) => !/Failed to load resource|ERR_BLOCKED_BY_CLIENT/.test(e)), []);
+  await f.s('Network.setBlockedURLs', { urls: [] });
+  await f.ev("document.getElementById('city-search').blur()");
+  await f.click('#city-search');
+  assert.ok(await f.waitFor("'CITIES' in globalThis"), 'the next use loads it');
+  await sleep(200);
+  assert.equal(await text(f, 'city-status'), '');
+  await f.type('#city-search', 'oslo');
+  assert.ok(await openedList(f));
+  await f.close();
+});
+
+await check('B9 400 px wide with text at 200%: a city chosen, no sideways scroll, the clear button at least 44 by 44, the list inside the window', async () => {
+  const m = await open({ width: 400, height: 800 });
+  await m.s('Page.setFontSizes', { fontSizes: { standard: 32, fixed: 26 } });
+  await pickFirst(m, 'bergen');
+  await m.ev("document.querySelectorAll('.year-group').forEach((d) => { d.open = true; })");
+  await sleep(300);
+  assert.equal(await m.ev('document.documentElement.scrollWidth'), await m.ev('document.documentElement.clientWidth'), 'no sideways scroll');
+  const box = await m.ev("(() => { const b = document.getElementById('city-clear-btn').getBoundingClientRect(); return [b.width, b.height]; })()");
+  assert.ok(box[0] >= 44 && box[1] >= 44, `the clear button is ${box}`);
+  assert.deepEqual(await m.ev("[...document.querySelectorAll('body *')].filter((n) => !n.closest('.app-switcher-marquee') && n.getBoundingClientRect().right > 400.5).map((n) => n.className || n.tagName)"), []);
+  await m.type('#city-search', 'ber');
+  assert.ok(await openedList(m));
+  assert.ok(await m.ev("document.getElementById('city-dropdown').getBoundingClientRect().right <= document.documentElement.clientWidth + 0.5"));
+  if (shots) await m.viewShot(join(shots, 'city-400-200.png'));
+  assert.deepEqual(m.log.errors, []);
+  await m.close();
+});
+
+await check('B13 the card as MeteorWatch has it: after the countdown card and before the list, "Filter by city", the short placeholder whole at 360 px, a "Clear city" text button, the record with v: 1', async () => {
+  for (const width of [1280, 360]) {
+    const m = await open({ width, height: 800 });
+    const order = await m.ev("(() => { const top = (id) => document.getElementById(id).closest('section').getBoundingClientRect(); const cd = top('eclipse-type'), ci = top('city-card'), li = top('list-heading'); return [cd.bottom <= ci.top + 1, ci.bottom <= li.top + 1, [...document.querySelectorAll('main > section')].map((n) => n.className).join('|')]; })()");
+    assert.equal(order[0], true, `${width} px: the city card is below the countdown card`);
+    assert.equal(order[1], true, `${width} px: the list card is below the city card`);
+    assert.match(order[2], /^card\|city-card\|card list-card\|/, `${width} px: the order of the sections`);
+    assert.equal(await text(m, 'city-heading'), 'Filter by city');
+    assert.equal(await m.ev("document.querySelector('#city-card h2').tagName"), 'H2');
+    assert.equal(await m.ev("document.getElementById('city-search').placeholder"), 'e.g. Bergen, Tokyo');
+    assert.equal(await m.ev("document.getElementById('city-search').getAttribute('aria-describedby')"), 'city-intro city-privacy');
+    // The placeholder fits inside the box: its width in the box's own font, less the box's padding, is no wider than the box's content.
+    const fit = await m.ev("(() => { const i = document.getElementById('city-search'); const cs = getComputedStyle(i); const g = document.createElement('canvas').getContext('2d'); g.font = cs.font; const w = g.measureText(i.placeholder).width; const room = i.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight); return [w, room, i.getBoundingClientRect().right <= document.documentElement.clientWidth]; })()");
+    assert.ok(fit[0] <= fit[1], `${width} px: the placeholder is ${fit[0]} px wide in a box with ${fit[1]} px of room`);
+    assert.equal(fit[2], true, 'the box is inside the window');
+    if (shots) await m.viewShot(join(shots, `city-card-${width}.png`));
+    await pickFirst(m, 'bergen');
+    assert.equal(await text(m, 'city-clear-btn'), 'Clear city');
+    assert.equal(await m.ev("document.getElementById('city-clear-btn').hasAttribute('aria-label')"), false, 'the visible text is the name');
+    const box = await m.ev("(() => { const b = document.getElementById('city-clear-btn').getBoundingClientRect(); return [b.width, b.height, b.right <= document.documentElement.clientWidth]; })()");
+    assert.ok(box[0] >= 44 && box[1] >= 44 && box[2], `${width} px: the button is ${box}`);
+    assert.equal(await m.ev('document.documentElement.scrollWidth'), await m.ev('document.documentElement.clientWidth'), 'no sideways scroll');
+    if (shots) await m.viewShot(join(shots, `city-card-chosen-${width}.png`));
+    // The kept record: the six keys in order, the first being v: 1; MeteorWatch keeps the same record under its own key.
+    const kept = await m.ev('localStorage.getItem(' + J(CITY_KEY) + ')');
+    assert.equal(kept, BERGEN_TEXT);
+    assert.deepEqual(Object.keys(JSON.parse(kept)), ['v', 'name', 'country', 'lat', 'lon', 'tz']);
+    assert.equal(JSON.parse(kept).v, 1);
+    assert.equal(await m.ev('localStorage.length'), 1, 'one key and no other');
+    assert.deepEqual(m.log.errors, []);
+    assert.deepEqual(m.log.offsite, []);
+    await m.close();
+  }
+});
+
+await check('B14 the default alarm: with a city and a local start before 12:00 it is the day before at 12:00; later in the day it is the day itself; with no city it is unchanged', async () => {
+  const sydney = localAll(SYDNEY);
+  const startOf = (id: string): number => minuteOf(defined(sydney.get(id), id).start);
+  const timeIn = (id: string): string => localDateTime('Australia/Sydney', startOf(id)).time;
+  const id0718 = '2027-07-18-lunar';
+  assert.equal(timeIn(id0718), '01:57', 'Sydney, eclipse 2027-07-18: the penumbral eclipse starts at 01:57 local time, on Monday 19 July');
+  const later = ECLIPSES.filter((e) => sydney.has(e.id) && startOf(e.id) > NOW).find((e) => timeIn(e.id) >= '12:00');
+  const daytime = defined(later, 'a Sydney eclipse that starts at 12:00 or later');
+  const chosen = (y: Page): Promise<string[]> => y.ev("[document.querySelector('.alarm-choice').value, document.querySelector('.alarm-time').value, document.querySelector('.alarm-result').textContent]");
+  const openFor = async (y: Page, id: string): Promise<string[]> => {
+    await y.ev(`document.querySelector('.btn-alarm[data-id=${J(id)}]').click()`);
+    assert.ok(await y.waitFor("document.getElementById('planner').open"));
+    const got = await chosen(y);
+    await y.key('Escape');
+    return got;
+  };
+  const y = await open({ width: 1280, height: 900 });
+  // No city: the default is on the day at 12:00, whatever the hour of the eclipse.
+  assert.deepEqual((await openFor(y, id0718)).slice(0, 2), ['day-0', '12:00']);
+  await pickFirst(y, 'sydney');
+  const night = await openFor(y, id0718);
+  assert.deepEqual(night.slice(0, 2), ['day-1', '12:00'], 'the day before at 12:00');
+  assert.match(night[2] ?? '', /^Rings Sunday 18 July 2027 at 12:00 \(UTC\+10\)\.$/, 'it rings before the start (Monday 19 July at 01:57), and without the warning for an alarm after it');
+  const day = await openFor(y, daytime.id);
+  assert.deepEqual(day.slice(0, 2), ['day-0', '12:00'], `${daytime.id} starts at ${timeIn(daytime.id)} in Sydney: the day itself at 12:00`);
+  // Clear the city: the default is the old one again.
+  await y.click('#city-clear-btn');
+  assert.deepEqual((await openFor(y, id0718)).slice(0, 2), ['day-0', '12:00']);
+  assert.deepEqual(y.log.errors, []);
+  await y.close();
 });
 
 // ---- Layout: three widths, two text sizes, the dark theme -----------------------------------

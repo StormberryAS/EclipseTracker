@@ -1,5 +1,5 @@
 import { ECLIPSES } from './data.js?v=f0f28d45';
-import { greatestMinute } from './format.js?v=be22d0d5';
+import { greatestMinute } from './format.js?v=635b29f8';
 export { ECLIPSES };
 const byId = new Map(ECLIPSES.map((e) => [e.id, e]));
 export function eclipseById(id) {
@@ -8,11 +8,11 @@ export function eclipseById(id) {
 export function greatestMs(e) {
     return Date.parse(e.greatest);
 }
-export function upcoming(now, list = ECLIPSES) {
-    return list.filter((e) => greatestMinute(e) > now);
+export function upcoming(now, list = ECLIPSES, at = greatestMinute) {
+    return list.filter((e) => at(e) > now);
 }
-export function nextEclipse(now, list = ECLIPSES) {
-    return list.find((e) => greatestMinute(e) > now);
+export function nextEclipse(now, list = ECLIPSES, at = greatestMinute) {
+    return list.find((e) => at(e) > now);
 }
 export function matches(e, f) {
     return (f.kind === 'all' || e.kind === f.kind) && (f.type === 'all' || e.type === f.type);

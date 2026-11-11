@@ -23,15 +23,16 @@ export function greatestMs(e: Pick<Eclipse, 'greatest'>): number {
  * Every eclipse whose greatest eclipse is still to come at `now`, in order. "Still to come" uses
  * greatest eclipse rounded to the minute, the time the page shows and counts down to, so the
  * countdown reaches zero at the minute shown and the eclipse leaves the list then (code review
- * C-20), not up to 30 seconds before or after.
+ * C-20), not up to 30 seconds before or after. `at` is the minute that counts for an eclipse: greatest
+ * eclipse by default; with a city chosen the page passes the minute the eclipse starts there.
  */
-export function upcoming(now: number, list: readonly Eclipse[] = ECLIPSES): Eclipse[] {
-  return list.filter((e) => greatestMinute(e) > now);
+export function upcoming(now: number, list: readonly Eclipse[] = ECLIPSES, at: (e: Eclipse) => number = greatestMinute): Eclipse[] {
+  return list.filter((e) => at(e) > now);
 }
 
-/** The next eclipse after `now` (by the rounded minute, as upcoming()), or undefined once the list has run out (after 2100). */
-export function nextEclipse(now: number, list: readonly Eclipse[] = ECLIPSES): Eclipse | undefined {
-  return list.find((e) => greatestMinute(e) > now);
+/** The next eclipse after `now` (by the rounded minute `at`, as upcoming()), or undefined once the list has run out (after 2100). */
+export function nextEclipse(now: number, list: readonly Eclipse[] = ECLIPSES, at: (e: Eclipse) => number = greatestMinute): Eclipse | undefined {
+  return list.find((e) => at(e) > now);
 }
 
 /** What the list shows. kind 'all' or one kind; type 'all' or one type. */

@@ -68,12 +68,14 @@ h1, h2, h3 { color: var(--text-primary); font-weight: 600; line-height: 1.2; let
 
 .main-content { flex: 1; padding: 0 var(--sp-md) var(--sp-2xl); display: flex; flex-direction: column; align-items: center; }
 
-.card {
+/* .city-card is a card in all but its class: the Android bridge puts the app's overview after the first
+   `main .card`, which must stay the countdown card. */
+.card, .city-card {
   background: var(--bg-card); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--sp-xl);
   box-shadow: var(--shadow-card); position: relative; overflow: hidden; width: 100%; max-width: 600px;
 }
-.card::before {
+.card::before, .city-card::before {
   content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
   background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
 }
@@ -196,7 +198,7 @@ select { padding-left: 0.6em; padding-right: 0.6em; }
 .badge-solar { color: #f8f8f8; }
 .badge-lunar { color: var(--accent-blue); border-color: rgba(130, 170, 255, 0.4); }
 .eclipse-when { font-weight: 600; font-variant-numeric: tabular-nums; }
-.eclipse-region, .eclipse-path, .eclipse-mag { color: var(--text-secondary); font-size: 0.9rem; overflow-wrap: anywhere; }
+.eclipse-region, .eclipse-path, .eclipse-mag, .eclipse-local { color: var(--text-secondary); font-size: 0.9rem; overflow-wrap: anywhere; }
 .btn-alarm { align-self: flex-start; margin-top: var(--sp-sm); padding: 0.5rem 1rem; min-height: 44px; background: transparent; color: var(--text-primary); border: 1px solid var(--border-active); }
 .btn-alarm:hover { background: var(--bg-card-hover); }
 
@@ -225,11 +227,59 @@ select { padding-left: 0.6em; padding-right: 0.6em; }
 .planner-actions .btn, #add-alarm { min-height: 44px; }
 #add-alarm { align-self: flex-start; }
 
+/* CITY FILTER (11 November 2026)
+   The chooser card: the search box with its suggestion list, the chosen city with its clear button,
+   and the label above the countdown. Colours are the page's own tokens; every text and border
+   colour meets the contrast the static test checks (4.5:1 text, 3:1 borders). */
+/* A label such as "Seen as" stays on one line; the value beside it wraps instead. */
+.event-label { flex-shrink: 0; }
+.countdown-to { color: var(--text-secondary); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--sp-sm); }
+/* The card normally clips what sticks out of it; the suggestion list must be able to, and to sit above the cards below. */
+.city-card { overflow: visible; z-index: 2; display: flex; flex-direction: column; gap: var(--sp-sm); }
+.city-note { color: var(--text-secondary); font-size: 0.82rem; }
+.search-wrapper { position: relative; }
+.search-icon { position: absolute; left: 0.8rem; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: var(--text-muted); pointer-events: none; }
+.search-wrapper:focus-within .search-icon { color: var(--accent-silver); }
+.search-input {
+  font: inherit; font-size: 1rem; color: var(--text-primary); background: var(--bg-surface);
+  border: 1px solid var(--accent-slate); border-radius: var(--r-sm); padding: 0.55rem 0.6rem 0.55rem 2.4rem;
+  min-height: 44px; width: 100%; max-width: 100%; color-scheme: dark;
+}
+.dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 100; list-style: none;
+  max-height: 240px; overflow-y: auto; background: #0b0b10; border: 1px solid var(--border-active);
+  border-radius: var(--r-md); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7); scrollbar-width: thin;
+}
+.dropdown li {
+  display: flex; justify-content: space-between; align-items: center; gap: var(--sp-sm); flex-wrap: wrap;
+  min-height: 44px; padding: 0.55rem 1rem; cursor: pointer; font-size: 0.9rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+.dropdown li:last-child { border-bottom: none; }
+.dropdown li:hover, .dropdown li.highlighted { background: rgba(255, 255, 255, 0.1); color: var(--accent-white); }
+.dropdown li .city-name { font-weight: 500; overflow-wrap: anywhere; }
+.dropdown li .city-country { font-size: 0.75rem; color: var(--text-muted); }
+.selected-city {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-sm); padding: var(--sp-xs) var(--sp-sm) var(--sp-xs) var(--sp-md);
+  background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-active); border-radius: var(--r-sm);
+  font-size: 0.92rem; color: var(--accent-silver);
+}
+#city-selected-text { overflow-wrap: anywhere; }
+/* The text button "Clear city", as in MeteorWatch: a visible border and a label, 44 px high. */
+.clear-btn {
+  margin-left: auto; min-height: 44px; padding: 0 var(--sp-md); background: none; border: 1px solid var(--border-active); border-radius: var(--r-sm);
+  color: var(--text-primary); cursor: pointer; font: inherit; font-size: 0.85rem; font-weight: 600; line-height: 1.2;
+}
+.clear-btn:hover { color: var(--accent-white); border-color: var(--text-secondary); }
+/* What the chooser is doing, in sight as in MeteorWatch (loading, no city found, the city shown). */
+.city-status { color: var(--text-secondary); font-size: 0.85rem; line-height: 1.4; min-height: 1.4em; }
+.clear-btn:focus-visible, .dropdown li:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+
 @media (max-width: 420px) {
   /* The side paddings stop growing with the text size (the min() with px), so large text keeps
      the room it needs on a narrow screen (K-2); at 100% text they are exactly what they were. */
   .main-content { padding-left: min(var(--sp-md), 16px); padding-right: min(var(--sp-md), 16px); }
-  .card { padding: var(--sp-lg) min(var(--sp-md), 16px); }
+  .card, .city-card { padding: var(--sp-lg) min(var(--sp-md), 16px); }
   .event-row { flex-direction: column; align-items: flex-start; gap: 0; }
   .event-value { text-align: left; }
   /* The browser's own limit on a modal dialog is 100% less 6px and 2em, so it too is capped in px. */

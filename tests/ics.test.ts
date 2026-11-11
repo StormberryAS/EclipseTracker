@@ -10,7 +10,8 @@ import { MAX_ALARMS, planAlarms, ringing } from '#core/alarms.js';
 import { ECLIPSES } from '#core/data.js';
 import { icsFileName, isIcsFileName } from '#core/format.js';
 import { EVENT_MINUTES, PRODID, buildIcs, escapeText, foldLine, triggerDuration, utcStamp } from '#core/ics.js';
-import { goldenIcs } from './golden-case.ts';
+import { CAIRO, cairoIcs, goldenIcs } from './golden-case.ts';
+import { localFor } from '#core/local.js';
 import type { AlarmSpec, Eclipse } from '#core/types.js';
 import { defined } from './helpers.ts';
 
@@ -171,4 +172,51 @@ test('file names: only the strict pattern (stage B checks a name from the page w
 test('the uid must be random hex from the caller', () => {
   const e = defined(ECLIPSES[0], 'the first eclipse');
   for (const bad of ['', 'xyz', 'ABCDEF0123456789', '0123456789abcde', 'g'.repeat(32)]) assert.throws(() => buildIcs({ eclipse: e, alarms: [], uid: bad, dtstamp: 0 }), RangeError);
+});
+
+// ==== With a city (city filter, 11 November 2026) ===============================================
+
+test('with a city: the golden calendar file for Cairo, byte for byte', () => {
+  const want = readFileSync(new URL('./goldens/eclipse-2027-08-02-solar-cairo.ics', import.meta.url), 'utf8');
+  assert.equal(cairoIcs(), want);
+});
+
+test('with a city: the event is the local start to the local end, the place is named, the triggers are durations from the start', () => {
+  const ics = cairoIcs();
+  const l = lines(ics);
+  const local = defined(localFor(byId('2027-08-02-solar'), CAIRO), 'Cairo');
+  assert.ok(l.includes('LOCATION:Cairo\\, Egypt'));
+  assert.ok(l.includes('SUMMARY:Partial solar eclipse seen from Cairo'));
+  const start = Math.floor((local.start + 30_000) / 60_000) * 60_000;
+  const end = Math.floor((local.end + 30_000) / 60_000) * 60_000;
+  assert.ok(l.includes(`DTSTART:${utcStamp(start)}`));
+  assert.ok(l.includes(`DTEND:${utcStamp(end)}`));
+  assert.ok(end > start);
+  // Both alarms are triggers relative to DTSTART: 30 minutes before, and 12:00 in Cairo (UTC+3) = 09:00 UTC, 27 minutes after 08:33 UTC.
+  assert.deepEqual(l.filter((x) => x.startsWith('TRIGGER')), ['TRIGGER:-PT30M', 'TRIGGER:PT27M']);
+  assert.doesNotMatch(ics, /TZID|VTIMEZONE|TRIGGER;/);
+  for (const line of ics.split('\r\n')) assert.ok(octets(line) <= 75, line);
+  // The times in the description carry the city's offset.
+  assert.match(unfold(ics), /Starts Monday 2 August 2027 at 11:33 \(UTC\+3\)\./);
+});
+
+test('with a city: the end is never before the start (at least one minute), and a lunar file names the Moon height', () => {
+  const e = byId('2027-02-20-lunar');
+  const row = { name: 'Bergen', country: 'Norway', lat: 60.393, lon: 5.3242, tz: 'Europe/Oslo' };
+  const local = defined(localFor(e, row), 'Bergen');
+  const now = Date.parse('2026-11-11T12:00:00Z');
+  const ics = buildIcs({ eclipse: e, alarms: [], uid: 'a'.repeat(32), dtstamp: now, local: { place: 'Bergen, Norway', city: 'Bergen', zone: 'Europe/Oslo', local } });
+  const u = unfold(ics);
+  assert.match(u, /SUMMARY:Penumbral lunar eclipse seen from Bergen/);
+  assert.match(u, /Maximum [A-Za-z]+ \d+ February 2027 at \d\d:\d\d \(UTC\+1\)\\, the Moon \d+° above the horizon\./);
+  assert.match(u, /Faint: the Moon darkens only a little\./);
+  const l = lines(ics);
+  const s = defined(l.find((x) => x.startsWith('DTSTART:')), 'DTSTART').slice(8);
+  const f = defined(l.find((x) => x.startsWith('DTEND:')), 'DTEND').slice(6);
+  assert.ok(f > s);
+});
+
+test('without a city the file does not change: no place, no local words', () => {
+  const ics = unfold(goldenIcs());
+  assert.doesNotMatch(ics, /LOCATION|seen from|Starts |Local times for a city/);
 });

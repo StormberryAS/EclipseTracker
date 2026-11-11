@@ -1,12 +1,27 @@
 /*! app.js and core/*.js are compiled from ts/ by tools/build-ts.sh, which leaves out every comment
     but this one: the explanations are in the source. Edit ts/, never the .js: the build refuses to
     overwrite a hand edit, and its check mode fails on one. */
-import { DEFAULT_SPEC, MAX_ALARMS, RECORD_GRACE_MS, choiceOf, isValidRecordSet, nextNewSpec, planAlarm, planAlarms, recordsFromRows, ringing, rowsFromRecords, specForChoice } from './core/alarms.js?v=4a8fb0af';
-import { ECLIPSES, eclipseById, groupByYear, matches, nextEclipse, typesFor, upcoming } from './core/eclipses.js?v=d0629f00';
-import { BEFORE_CHOICES, DAY_CHOICES, alarmWords, countdownParts, countdownWords, dateWords, eclipseName, greatestMinute, icsFileName, localWhen, longDate, magnitudeWords, offsetWords, shortDate } from './core/format.js?v=be22d0d5';
-import { buildIcs } from './core/ics.js?v=e0c1da29';
-import { deviceZone, isWallTime, localDateTime, offsetMinutes } from './core/zoned.js?v=d3e47120';
+import { DEFAULT_SPEC, MAX_ALARMS, defaultSpecAt, RECORD_GRACE_MS, choiceOf, isValidRecordSet, nextNewSpec, planAlarm, planAlarmsAt, recordsFromRows, ringing, rowsFromRecords, specForChoice } from './core/alarms.js?v=473c494d';
+import { parseStoredCity, searchCities, storedCityText } from './core/citysearch.js?v=076aaaec';
+import { ECLIPSES, eclipseById, groupByYear, matches, nextEclipse, typesFor, upcoming } from './core/eclipses.js?v=7f5013ec';
+import { BEFORE_CHOICES, DAY_CHOICES, alarmWords, countdownParts, countdownWords, dateWords, eclipseName, greatestMinute, icsFileName, localEndWords, localListWords, localMaximumWords, localName, localNotes, localWhen, longDate, magnitudeWords, minuteOf, offsetWords, shortDate } from './core/format.js?v=635b29f8';
+import { buildIcs } from './core/ics.js?v=3611bb06';
+import { localAll } from './core/local.js?v=6aac7e54';
+import { deviceZone, isKnownZone, isWallTime, localDateTime, offsetMinutes } from './core/zoned.js?v=d3e47120';
 let ZONE = deviceZone();
+let city;
+let cityZone = 'UTC';
+let locals = new Map();
+function zoneNow() {
+    return city ? cityZone : ZONE;
+}
+function anchorOf(e) {
+    const l = city ? locals.get(e.id) : undefined;
+    return l ? minuteOf(l.start) : greatestMinute(e);
+}
+function visibleEclipses() {
+    return city ? ECLIPSES.filter((e) => locals.has(e.id)) : ECLIPSES;
+}
 function $(id) {
     const el = document.getElementById(id);
     if (!el)
@@ -34,8 +49,7 @@ function setText(node, text) {
     return true;
 }
 function shortWhen(e) {
-    const t = greatestMinute(e);
-    const { date, time } = localDateTime(ZONE, t);
+    const { date, time } = localDateTime(zoneNow(), anchorOf(e));
     return `${shortDate(date)}, ${time}`;
 }
 let shown;
@@ -48,16 +62,30 @@ function showNext(e) {
     shown = e;
     const button = $('next-alarms');
     $('event-details').hidden = !e;
+    setText($('countdown-eyebrow'), city ? `Next eclipse seen from ${city.name}` : 'Next eclipse');
+    setText($('countdown-to'), city ? 'Starts in' : 'Greatest eclipse in');
+    $('countdown-to').hidden = !e;
     if (!e) {
-        setText($('eclipse-type'), 'No more eclipses in the list');
+        const none = city ? `No more eclipses seen from ${city.name} in the list` : 'No more eclipses in the list';
+        setText($('eclipse-type'), none);
         showDigits([0, 0, 0, 0]);
-        setText($('countdown-words'), 'No more eclipses in the list.');
+        setText($('countdown-words'), `${none}.`);
         button.disabled = true;
         delete button.dataset.id;
         return;
     }
-    setText($('eclipse-type'), eclipseName(e));
-    setText($('eclipse-date'), localWhen(ZONE, greatestMinute(e)));
+    const local = city ? locals.get(e.id) : undefined;
+    setText($('eclipse-type'), local ? localName(e.kind, local) : eclipseName(e));
+    setText($('eclipse-date-label'), local ? 'Starts' : 'Date');
+    setText($('eclipse-date'), localWhen(zoneNow(), anchorOf(e)));
+    for (const id of ['eclipse-max-row', 'eclipse-end-row', 'eclipse-seen-row'])
+        $(id).hidden = !local;
+    if (local) {
+        setText($('eclipse-max'), localMaximumWords(e.kind, local, cityZone));
+        setText($('eclipse-end'), localEndWords(local, cityZone));
+        const notes = localNotes(e.kind, local);
+        setText($('eclipse-seen'), notes.length > 0 ? `${localName(e.kind, local)}. ${notes.join(' ')}` : localName(e.kind, local));
+    }
     setText($('eclipse-region'), e.region);
     setText($('eclipse-path'), e.path);
     $('eclipse-path-row').hidden = !e.path;
@@ -67,6 +95,7 @@ function showNext(e) {
     setText($('eclipse-magnitude'), mag.value);
     button.disabled = false;
     button.dataset.id = e.id;
+    paintCountdown(Date.now());
 }
 function checkZone() {
     const zone = deviceZone();
@@ -80,11 +109,19 @@ function checkZone() {
         updateResults();
     }
 }
+function paintCountdown(now) {
+    if (!shown)
+        return;
+    const left = anchorOf(shown) - now;
+    const p = countdownParts(left);
+    showDigits([p.days, p.hours, p.minutes, p.seconds]);
+    setText($('countdown-words'), `${city ? 'Starts in' : 'Greatest eclipse in'} ${countdownWords(left)}.`);
+}
 function tick() {
     const now = Date.now();
-    if (!shown || greatestMinute(shown) <= now) {
+    if (!shown || anchorOf(shown) <= now) {
         const passed = shown !== undefined;
-        showNext(nextEclipse(now));
+        showNext(nextEclipse(now, visibleEclipses(), anchorOf));
         if (passed)
             renderList(true);
     }
@@ -95,12 +132,7 @@ function tick() {
         if (planning)
             updateResults();
     }
-    if (shown) {
-        const left = greatestMinute(shown) - now;
-        const p = countdownParts(left);
-        showDigits([p.days, p.hours, p.minutes, p.seconds]);
-        setText($('countdown-words'), `Greatest eclipse in ${countdownWords(left)}.`);
-    }
+    paintCountdown(now);
     window.setTimeout(tick, 1000 - (Date.now() % 1000) + 5);
 }
 const TYPE_LABELS = {
@@ -127,20 +159,26 @@ function itemFor(e) {
     head.append(el('h4', { class: 'eclipse-name' }, eclipseName(e)));
     li.append(head);
     const when = el('p', { class: 'eclipse-when' });
-    when.append(el('time', { datetime: new Date(greatestMinute(e)).toISOString().replace(/:00\.000Z$/, 'Z') }, `${shortWhen(e)} (${offsetWords(offsetMinutes(ZONE, greatestMinute(e)))})`));
+    const local = city ? locals.get(e.id) : undefined;
+    const offset = offsetWords(offsetMinutes(zoneNow(), anchorOf(e)));
+    when.append(el('time', { datetime: new Date(anchorOf(e)).toISOString().replace(/:00\.000Z$/, 'Z') }, `${local ? 'Starts ' : ''}${shortWhen(e)} (${offset})`));
     li.append(when);
     li.append(el('p', { class: 'eclipse-region' }, `Visible from ${e.region}.`));
+    if (city && local)
+        li.append(el('p', { class: 'eclipse-local' }, localListWords(e.kind, city.name, local)));
     if (e.path)
         li.append(el('p', { class: 'eclipse-path' }, `Central path: ${e.path}.`));
     const mag = magnitudeWords(e);
     li.append(el('p', { class: 'eclipse-mag' }, `${mag.label} ${mag.value}`));
     const button = el('button', { type: 'button', class: 'btn btn-alarm', 'data-id': e.id }, 'Set alarms');
-    button.append(el('span', { class: 'sr-only' }, ` for the ${eclipseName(e).toLowerCase()} of ${dateWords(localDateTime(ZONE, greatestMinute(e)).date)}`));
+    const name = (local ? localName(e.kind, local) : eclipseName(e)).toLowerCase();
+    button.append(el('span', { class: 'sr-only' }, ` for the ${name} of ${dateWords(localDateTime(zoneNow(), anchorOf(e)).date)}`));
     li.append(button);
     return li;
 }
 function countWords(n, years) {
-    return `${n} ${n === 1 ? 'eclipse' : 'eclipses'} in ${years} ${years === 1 ? 'year' : 'years'}.`;
+    const seen = city ? ` seen from ${city.name}` : '';
+    return `${n} ${n === 1 ? 'eclipse' : 'eclipses'}${seen} in ${years} ${years === 1 ? 'year' : 'years'}.`;
 }
 function renderList(keep = false) {
     const host = $('eclipse-list');
@@ -157,9 +195,9 @@ function renderList(keep = false) {
         }
     }
     const filter = currentFilter();
-    const all = upcoming(Date.now());
+    const all = upcoming(Date.now(), visibleEclipses(), anchorOf);
     const list = all.filter((e) => matches(e, filter));
-    const groups = groupByYear(list, (e) => Number(localDateTime(ZONE, greatestMinute(e)).date.slice(0, 4)));
+    const groups = groupByYear(list, (e) => Number(localDateTime(zoneNow(), anchorOf(e)).date.slice(0, 4)));
     const frag = document.createDocumentFragment();
     groups.forEach((g, i) => {
         const details = el('details', { class: 'year-group', 'data-year': String(g.year) });
@@ -187,13 +225,13 @@ function renderList(keep = false) {
     host.replaceChildren(frag);
     let text;
     if (all.length === 0)
-        text = 'There are no more eclipses in the list.';
+        text = city ? `No eclipse in the list can be seen from ${city.name}.` : 'There are no more eclipses in the list.';
     else if (list.length === 0)
         text = 'No eclipse of this kind and type is left in the list.';
     else if (list.length === all.length)
         text = countWords(all.length, groups.length);
     else
-        text = `Showing ${list.length} of ${all.length} ${all.length === 1 ? 'eclipse' : 'eclipses'}, in ${groups.length} ${groups.length === 1 ? 'year' : 'years'}.`;
+        text = `Showing ${list.length} of ${all.length} ${all.length === 1 ? 'eclipse' : 'eclipses'}${city ? ` seen from ${city.name}` : ''}, in ${groups.length} ${groups.length === 1 ? 'year' : 'years'}.`;
     setText($('list-count'), text);
     if (focusId !== undefined || focusYear !== undefined) {
         const button = focusId ? host.querySelector(`.btn-alarm[data-id="${focusId}"]`) : null;
@@ -219,7 +257,12 @@ function say(text) {
 }
 function plannerHeader(e) {
     setText($('planner-title'), `Alarms for the ${eclipseName(e).toLowerCase()}`);
-    const t = greatestMinute(e);
+    const t = anchorOf(e);
+    if (city) {
+        setText($('planner-when'), `Starts in ${city.name}: ${localWhen(cityZone, t)}, which is ${localDateTime('UTC', t).time} UTC.`);
+        setText($('planner-zone'), `Times of day are for the time zone of ${city.name}, ${cityZone}. The alarms ring at those moments wherever you are, so your calendar can show another hour. Alarms before the start always follow the eclipse.`);
+        return;
+    }
     setText($('planner-when'), `Greatest eclipse: ${localWhen(ZONE, t)}, which is ${localDateTime('UTC', t).time} UTC.`);
     const travel = host?.travelNote ?? 'If you travel, those alarms still ring at the same moment, which may be a different hour where you are. Alarms before greatest eclipse always follow the eclipse.';
     setText($('planner-zone'), `Times of day are for this device's time zone, ${ZONE}. ${travel}`);
@@ -227,7 +270,7 @@ function plannerHeader(e) {
 function openPlanner(e, from, start = []) {
     planning = e;
     opener = from;
-    const initial = start.length > 0 ? start.slice(0, MAX_ALARMS) : [{ spec: DEFAULT_SPEC }];
+    const initial = start.length > 0 ? start.slice(0, MAX_ALARMS) : [{ spec: city ? defaultSpecAt(anchorOf(e), cityZone) : DEFAULT_SPEC }];
     rows = initial.map((r) => ({ ...(r.id ? { id: r.id } : {}), spec: r.spec, timeText: r.spec.kind === 'day' ? r.spec.time : lastTime }));
     plannerHeader(e);
     $('planner-status').textContent = '';
@@ -251,7 +294,10 @@ function resultWords(p, planned) {
         return `This rings at the same moment as alarm ${first + 1}, so it is left out of the file.`;
     }
     let words = `Rings ${longDate(p.localDate)} at ${p.localTime} (${offsetWords(p.offsetMinutes)})`;
-    words += p.afterGreatest ? ', after greatest eclipse. Some calendars leave out an alarm set for after the eclipse begins.' : '.';
+    const after = city
+        ? ', after the eclipse starts. Some calendars leave out an alarm set for after the eclipse begins.'
+        : ', after greatest eclipse. Some calendars leave out an alarm set for after the eclipse begins.';
+    words += p.afterGreatest ? after : '.';
     const spec = p.spec;
     if (spec.kind === 'day' && p.dst === 'gap')
         words += ` The clocks go forward that night and ${spec.time} does not exist, so it rings at ${p.localTime}.`;
@@ -264,7 +310,7 @@ function planRows(now) {
         return [];
     const specs = rowSpecs();
     const complete = specs.filter((s) => s !== null);
-    const planned = planAlarms(planning, complete, ZONE, now);
+    const planned = planAlarmsAt(anchorOf(planning), complete, zoneNow(), now);
     let k = 0;
     return specs.map((s) => (s === null ? null : planned[k++] ?? null));
 }
@@ -300,7 +346,7 @@ function renderRows(focusIndex = -1) {
         choiceLabel.append(el('span', { class: 'field-label' }, 'When'));
         const choice = el('select', { class: 'alarm-choice', 'aria-describedby': resultId });
         for (const c of DAY_CHOICES)
-            choice.append(el('option', { value: c.value }, c.label));
+            choice.append(el('option', { value: c.value }, city && c.value === 'before' ? 'Before the eclipse starts' : c.label));
         choice.value = choiceOf(row.spec);
         choiceLabel.append(choice);
         fs.append(choiceLabel);
@@ -399,9 +445,9 @@ function randomHex(bytes) {
 function checkedPlan(now, kept = false) {
     if (!planning)
         return undefined;
-    const g = greatestMinute(planning);
+    const g = anchorOf(planning);
     if (g <= now && !(kept && now < g + RECORD_GRACE_MS)) {
-        say('This eclipse has passed, so there is nothing to save.');
+        say(city ? `This eclipse has already started in ${city.name}, so there is nothing to save.` : 'This eclipse has passed, so there is nothing to save.');
         return undefined;
     }
     const planned = planRows(now);
@@ -417,7 +463,11 @@ function prepareFile(now) {
     const plan = checkedPlan(now);
     if (!plan)
         return undefined;
-    const text = buildIcs({ eclipse: plan.eclipse, alarms: plan.planned, uid: randomHex(16), dtstamp: now });
+    const local = city ? locals.get(plan.eclipse.id) : undefined;
+    const text = buildIcs({
+        eclipse: plan.eclipse, alarms: plan.planned, uid: randomHex(16), dtstamp: now,
+        ...(city && local ? { local: { place: `${city.name}, ${city.country}`, city: city.name, zone: cityZone, local } } : {}),
+    });
     return { name: icsFileName(plan.eclipse), text, alarms: ringing(plan.planned).length };
 }
 function savedWords(name, n) {
@@ -442,7 +492,283 @@ function save() {
     say(savedWords(file.name, file.alarms));
     updateResults();
 }
+const CITY_KEY = 'eclipsetracker.city';
+const CATALOGUE_URL = new URL('./cities.js?v=2f08782c', import.meta.url).href;
+const INTRO_ALL = $('list-intro').textContent ?? '';
+const NOTE_ALL = $('planner-note').textContent ?? '';
+const KEEPS_NOTHING = 'EclipseTracker sends nothing and keeps nothing.';
+const PRIVACY_KEPT = 'EclipseTracker remembers your city in this browser only and sends it nowhere. Clear it with the Clear city button.';
+const PRIVACY_NOT_KEPT = 'This browser would not let EclipseTracker keep your city, so it is forgotten when you close the page. EclipseTracker sends it nowhere. Clear it with the Clear city button.';
+let catalogue;
+function loadCatalogue() {
+    if (catalogue)
+        return catalogue;
+    const loaded = new Promise((resolve, reject) => {
+        if ('CITIES' in globalThis && 'foldQuery' in globalThis) {
+            resolve();
+            return;
+        }
+        const script = document.createElement('script');
+        script.src = CATALOGUE_URL;
+        script.async = true;
+        script.addEventListener('load', () => {
+            if ('CITIES' in globalThis && 'foldQuery' in globalThis) {
+                resolve();
+            }
+            else {
+                script.remove();
+                reject(new Error('cities.js defined no catalogue'));
+            }
+        });
+        script.addEventListener('error', () => {
+            script.remove();
+            reject(new Error('cities.js did not load'));
+        });
+        document.head.append(script);
+    });
+    catalogue = loaded;
+    loaded.catch(() => { if (catalogue === loaded)
+        catalogue = undefined; });
+    return loaded;
+}
+function keepCity(c) {
+    if (host) {
+        if (typeof host.saveCity === 'function')
+            host.saveCity(c ? storedCityText(c) : null).then(() => undefined, () => undefined);
+        return true;
+    }
+    try {
+        if (c)
+            window.localStorage.setItem(CITY_KEY, storedCityText(c));
+        else
+            window.localStorage.removeItem(CITY_KEY);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function readKeptCity() {
+    let text;
+    try {
+        text = window.localStorage.getItem(CITY_KEY);
+    }
+    catch {
+        return { city: undefined, blocked: true };
+    }
+    if (text === null)
+        return { city: undefined, blocked: false };
+    const c = parseStoredCity(text);
+    if (c)
+        return { city: c, blocked: false };
+    if (!parseStoredCity(text, { anyZone: true })) {
+        try {
+            window.localStorage.removeItem(CITY_KEY);
+        }
+        catch {
+        }
+    }
+    return { city: undefined, blocked: false };
+}
+function setCityState(c, stored = false) {
+    city = c;
+    cityZone = c && isKnownZone(c.tz) ? c.tz : 'UTC';
+    locals = c ? localAll({ lat: c.lat, lon: c.lon }) : new Map();
+    $('city-selected').hidden = !c;
+    setText($('city-selected-text'), c ? `${c.name}, ${c.country}` : '');
+    setText($('list-intro'), c
+        ? `Eclipses that can be seen from ${c.name}, from NASA's eclipse catalogue, with the time each starts there in that city's time zone. Open a year to see its eclipses.`
+        : INTRO_ALL);
+    if (!host)
+        setText($('planner-note'), c && stored ? NOTE_ALL.replace(KEEPS_NOTHING, 'EclipseTracker sends nothing; it keeps only the city you chose, in this browser.') : NOTE_ALL);
+}
+function redrawForCity() {
+    showNext(nextEclipse(Date.now(), visibleEclipses(), anchorOf));
+    renderList();
+}
+function initCity() {
+    const card = $('city-card');
+    const privacy = $('city-privacy');
+    let touched = false;
+    if (host) {
+        if (host.cities !== true)
+            return;
+        privacy.textContent = typeof host.saveCity === 'function'
+            ? 'Your city stays on this phone only. Clear it with the Clear city button.'
+            : 'Your city stays on this phone and is forgotten when the app closes.';
+        if (typeof host.loadCity === 'function') {
+            host.loadCity().then((text) => {
+                const kept = parseStoredCity(text);
+                if (kept && !touched) {
+                    setCityState(kept);
+                    redrawForCity();
+                }
+            }, () => undefined);
+        }
+    }
+    else {
+        const kept = readKeptCity();
+        privacy.textContent = kept.blocked ? PRIVACY_NOT_KEPT : PRIVACY_KEPT;
+        if (kept.city)
+            setCityState(kept.city, true);
+    }
+    card.hidden = false;
+    const input = $('city-search');
+    const dropdown = $('city-dropdown');
+    const status = $('city-status');
+    const LOADING = 'Loading the city list.';
+    const rowsOf = new Map();
+    let highlighted = -1;
+    let statusTimer = 0;
+    let suggestionsSaid = false;
+    let focusIsOurs = false;
+    const closeDropdown = () => {
+        dropdown.hidden = true;
+        dropdown.replaceChildren();
+        rowsOf.clear();
+        highlighted = -1;
+        input.setAttribute('aria-expanded', 'false');
+        input.removeAttribute('aria-activedescendant');
+    };
+    const highlight = (index) => {
+        highlighted = index;
+        [...dropdown.children].forEach((li, i) => {
+            li.classList.toggle('highlighted', i === index);
+            li.setAttribute('aria-selected', i === index ? 'true' : 'false');
+        });
+        input.setAttribute('aria-activedescendant', `city-option-${index}`);
+        dropdown.children[index]?.scrollIntoView?.({ block: 'nearest' });
+    };
+    const openDropdown = (matches) => {
+        dropdown.replaceChildren();
+        rowsOf.clear();
+        highlighted = -1;
+        input.removeAttribute('aria-activedescendant');
+        matches.forEach((c, i) => {
+            const li = el('li', { role: 'option', id: `city-option-${i}`, 'aria-selected': 'false' });
+            li.append(el('span', { class: 'city-name' }, c.name), el('span', { class: 'city-country' }, c.country));
+            rowsOf.set(li, c);
+            dropdown.append(li);
+        });
+        dropdown.hidden = false;
+        input.setAttribute('aria-expanded', 'true');
+    };
+    const search = () => {
+        const cities = globalThis.CITIES;
+        const fold = globalThis.foldQuery;
+        if (!cities || !fold)
+            return;
+        const matches = searchCities(cities, fold, input.value).filter((c) => isKnownZone(c.tz));
+        if (matches.length === 0)
+            closeDropdown();
+        else
+            openDropdown(matches);
+        window.clearTimeout(statusTimer);
+        if (input.value.trim() === '') {
+            if (suggestionsSaid)
+                status.textContent = '';
+            suggestionsSaid = false;
+            return;
+        }
+        statusTimer = window.setTimeout(() => {
+            status.textContent = matches.length === 0 ? 'No city found.' : matches.length === 1 ? '1 suggestion.' : `${matches.length} suggestions.`;
+            suggestionsSaid = true;
+        }, 400);
+    };
+    const ensureCatalogue = () => {
+        if (catalogue || focusIsOurs)
+            return;
+        input.setAttribute('aria-busy', 'true');
+        status.textContent = LOADING;
+        loadCatalogue().then(() => {
+            input.removeAttribute('aria-busy');
+            if (status.textContent === LOADING)
+                status.textContent = '';
+            search();
+        }, () => {
+            input.removeAttribute('aria-busy');
+            status.textContent = 'The city list did not load. Reload the page to try again.';
+        });
+    };
+    const pick = (c) => {
+        const kept = { name: c.name, country: c.country, lat: c.lat, lon: c.lon, tz: c.tz };
+        touched = true;
+        const stored = keepCity(kept);
+        if (!host)
+            privacy.textContent = stored ? PRIVACY_KEPT : PRIVACY_NOT_KEPT;
+        setCityState(kept, stored);
+        window.clearTimeout(statusTimer);
+        input.value = '';
+        closeDropdown();
+        suggestionsSaid = false;
+        status.textContent = `Showing eclipses seen from ${c.name}, ${c.country}.`;
+        redrawForCity();
+    };
+    const clear = () => {
+        touched = true;
+        const forgotten = keepCity(undefined);
+        if (!host && !forgotten)
+            privacy.textContent = PRIVACY_NOT_KEPT;
+        setCityState(undefined);
+        window.clearTimeout(statusTimer);
+        input.value = '';
+        closeDropdown();
+        redrawForCity();
+        focusIsOurs = true;
+        input.focus();
+        focusIsOurs = false;
+        suggestionsSaid = false;
+        status.textContent = 'Showing every eclipse.';
+    };
+    input.addEventListener('focus', ensureCatalogue);
+    input.addEventListener('pointerdown', ensureCatalogue);
+    input.addEventListener('input', () => {
+        ensureCatalogue();
+        search();
+    });
+    input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Tab') {
+            closeDropdown();
+            return;
+        }
+        if (dropdown.hidden)
+            return;
+        const count = dropdown.children.length;
+        if (count === 0)
+            return;
+        if (ev.key === 'ArrowDown') {
+            ev.preventDefault();
+            highlight(Math.min(highlighted + 1, count - 1));
+        }
+        else if (ev.key === 'ArrowUp') {
+            ev.preventDefault();
+            highlight(Math.max(highlighted - 1, 0));
+        }
+        else if (ev.key === 'Enter') {
+            ev.preventDefault();
+            const chosen = highlighted >= 0 ? rowsOf.get(dropdown.children[highlighted]) : undefined;
+            if (chosen)
+                pick(chosen);
+        }
+        else if (ev.key === 'Escape') {
+            ev.preventDefault();
+            closeDropdown();
+        }
+    });
+    dropdown.addEventListener('click', (ev) => {
+        const row = ev.target.closest('li');
+        const chosen = row ? rowsOf.get(row) : undefined;
+        if (chosen)
+            pick(chosen);
+    });
+    document.addEventListener('click', (ev) => {
+        if (!ev.target.closest('.search-wrapper'))
+            closeDropdown();
+    });
+    $('city-clear-btn').addEventListener('click', clear);
+}
 function start() {
+    initCity();
     fillTypes();
     renderList();
     tick();

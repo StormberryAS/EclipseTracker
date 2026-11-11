@@ -40,7 +40,10 @@ export function offsetWords(minutes) {
     return `UTC${sign}${h}${m ? `:${String(m).padStart(2, '0')}` : ''}`;
 }
 export function greatestMinute(e) {
-    return Math.floor((Date.parse(e.greatest) + 30000) / 60000) * 60000;
+    return minuteOf(Date.parse(e.greatest));
+}
+export function minuteOf(ms) {
+    return Math.floor((ms + 30000) / 60000) * 60000;
 }
 export function localWhen(zone, epochMs) {
     const { date, time } = localDateTime(zone, epochMs);
@@ -95,4 +98,54 @@ export function icsFileName(e) {
 }
 export function isIcsFileName(name) {
     return typeof name === 'string' && ICS_FILE_NAME.test(name);
+}
+export function localName(kind, l) {
+    return `${TYPE_WORDS[l.type]} ${kind} eclipse`;
+}
+export function localNotes(kind, l) {
+    const body = kind === 'solar' ? 'Sun' : 'Moon';
+    const rise = kind === 'solar' ? 'sunrise' : 'moonrise';
+    const notes = [];
+    if (l.startsAtRise)
+        notes.push(`Already under way at ${rise}.`);
+    if (l.gap)
+        notes.push(`The ${body} sets and rises again during it.`);
+    if (l.endsAtSet)
+        notes.push(`The ${body} sets before it ends.`);
+    if (l.type === 'penumbral')
+        notes.push('Faint: the Moon darkens only a little.');
+    return notes;
+}
+export function localMagnitude(l) {
+    const m = l.magnitude ?? 0;
+    return (l.type === 'total' ? m : Math.min(m, 0.99)).toFixed(2);
+}
+export function coveredWords(l) {
+    const percent = (l.obscuration ?? 0) * 100;
+    if (percent < 0.5)
+        return 'less than 1% of the Sun covered';
+    const whole = Math.round(percent);
+    return `${l.type === 'total' ? whole : Math.min(whole, 99)}% of the Sun covered`;
+}
+export function moonHeightWords(l) {
+    const altitude = l.altitude ?? 0;
+    return altitude < 0.5 ? 'the Moon at the horizon' : `the Moon ${Math.round(altitude)}° above the horizon`;
+}
+export function clockWhen(zone, epochMs, onDate) {
+    const { date, time } = localDateTime(zone, epochMs);
+    return date === onDate ? time : `${shortDate(date)}, ${time}`;
+}
+export function localMaximumWords(kind, l, zone) {
+    const time = clockWhen(zone, minuteOf(l.max), localDateTime(zone, minuteOf(l.start)).date);
+    return kind === 'solar' ? `${time}, magnitude ${localMagnitude(l)}, ${coveredWords(l)}` : `${time}, ${moonHeightWords(l)}`;
+}
+export function localEndWords(l, zone) {
+    return clockWhen(zone, minuteOf(l.end), localDateTime(zone, minuteOf(l.start)).date);
+}
+export function localListWords(kind, name, l) {
+    const type = l.type;
+    if (kind === 'solar')
+        return `Seen from ${name}: ${type}, magnitude ${localMagnitude(l)}, ${coveredWords(l)}.`;
+    const faint = type === 'penumbral' ? ' Faint: the Moon darkens only a little.' : '';
+    return `Seen from ${name}: ${type}, ${moonHeightWords(l)} at maximum.${faint}`;
 }

@@ -1,5 +1,5 @@
-import { eclipseName, greatestMinute, magnitudeWords, utcWhen } from './format.js?v=be22d0d5';
-import { MAX_ALARMS, ringing } from './alarms.js?v=4a8fb0af';
+import { coveredWords, eclipseName, greatestMinute, localMagnitude, localName, localNotes, localWhen, magnitudeWords, minuteOf, moonHeightWords, utcWhen } from './format.js?v=635b29f8';
+import { MAX_ALARMS, ringing } from './alarms.js?v=473c494d';
 export const PRODID = '-//Stormberry AS//EclipseTracker 2.0//EN';
 export const EVENT_MINUTES = 30;
 export function escapeText(text) {
@@ -63,13 +63,36 @@ export function eventDescription(e) {
         'Made with EclipseTracker by Stormberry AS, eclipse.stormberry.as.',
     ].join('\n');
 }
-export function buildIcs({ eclipse, alarms, uid, dtstamp }) {
+export function localTitle(e, l) {
+    return `${localName(e.kind, l.local)} seen from ${l.city}`;
+}
+export function localDescription(e, l) {
+    const { local, zone } = l;
+    const when = (ms) => localWhen(zone, minuteOf(ms));
+    const maximum = e.kind === 'solar'
+        ? `Maximum ${when(local.max)}, magnitude ${localMagnitude(local)}, ${coveredWords(local)}.`
+        : `Maximum ${when(local.max)}, ${moonHeightWords(local)}.`;
+    return [
+        `${localName(e.kind, local)} seen from ${l.place}. Worldwide: ${eclipseName(e)}.`,
+        `Starts ${when(local.start)}.`,
+        maximum,
+        `Ends ${when(local.end)}.`,
+        ...localNotes(e.kind, local),
+        'Worked out for sea level and a flat, clear horizon.',
+        '',
+        'Times from NASA\'s eclipse catalogue (Fred Espenak, NASA Goddard Space Flight Center), rounded to the minute.',
+        'Local times for a city: Besselian elements and lunar eclipse elements from the Five Millennium Canons (Fred Espenak and Jean Meeus); Eclipse Predictions by Fred Espenak and Chris O\'Byrne (NASA\'s GSFC).',
+        'Made with EclipseTracker by Stormberry AS, eclipse.stormberry.as.',
+    ].join('\n');
+}
+export function buildIcs({ eclipse, alarms, uid, dtstamp, local }) {
     if (!/^[0-9a-f]{16,64}$/.test(uid))
         throw new RangeError('uid must be 16 to 64 hex digits');
     if (alarms.length > MAX_ALARMS)
         throw new RangeError(`at most ${MAX_ALARMS} alarms per eclipse, not ${alarms.length}`);
-    const start = greatestMinute(eclipse);
-    const title = eventTitle(eclipse);
+    const start = local ? minuteOf(local.local.start) : greatestMinute(eclipse);
+    const end = local ? Math.max(minuteOf(local.local.end), start + 60000) : start + EVENT_MINUTES * 60000;
+    const title = local ? localTitle(eclipse, local) : eventTitle(eclipse);
     const lines = [
         'BEGIN:VCALENDAR',
         'VERSION:2.0',
@@ -80,9 +103,10 @@ export function buildIcs({ eclipse, alarms, uid, dtstamp }) {
         `UID:${uid}@eclipse.stormberry.as`,
         `DTSTAMP:${utcStamp(dtstamp)}`,
         `DTSTART:${utcStamp(start)}`,
-        `DTEND:${utcStamp(start + EVENT_MINUTES * 60000)}`,
+        `DTEND:${utcStamp(end)}`,
         `SUMMARY:${escapeText(title)}`,
-        `DESCRIPTION:${escapeText(eventDescription(eclipse))}`,
+        ...(local ? [`LOCATION:${escapeText(local.place)}`] : []),
+        `DESCRIPTION:${escapeText(local ? localDescription(eclipse, local) : eventDescription(eclipse))}`,
         'TRANSP:TRANSPARENT',
     ];
     for (const a of ringing(alarms)) {

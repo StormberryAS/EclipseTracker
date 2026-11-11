@@ -8,10 +8,17 @@ Every solar and lunar eclipse from October 2026 to the end of 2100, from NASA's 
 - **Every eclipse to 2100**: 337 solar and lunar eclipses (total, annular, hybrid and partial solar; total, partial and penumbral lunar), with the time of greatest eclipse in your own time zone, the magnitude, where it can be seen and, for central solar eclipses, the path. Grouped by year, with a filter by kind and type.
 - **Countdown**: to the next eclipse, updated once a second.
 - **Alarms**: for any eclipse, one or more alarms: on the day at a time you choose (12:00 unless you change it), 1, 2 or 3 days or a week before at a time you choose, or 15 minutes, 30 minutes, 1 hour or 2 hours before greatest eclipse. You see exactly when each one rings, then save a calendar file (.ics) for your own calendar app, which rings them.
-- **Private**: no cookies, no tracking, no request leaves the page, nothing is stored. The page's own Content-Security-Policy allows no connection at all.
+- **Filter by city, if you want it**: choose a city by hand from the built-in city list (no GPS, no location permission, no network) and the countdown and the list show only the eclipses that can be seen from there, with every time in that city's time zone. The countdown then runs to the moment the eclipse starts there: first contact, or sunrise or moonrise if it is already under way. The alarm planner and the calendar file count from that moment too, and the file names the city. In the planner, the first alarm is set for the day before at 12:00 when the eclipse starts at the city before 12:00 local time, and for the day itself at 12:00 otherwise. A penumbral lunar eclipse counts when the Moon is up at some moment of its penumbral phase, and the page says it is faint. The rule is worked out for sea level and a flat, clear horizon: hills, buildings and clouds can hide an eclipse, and a time close to sunrise, sunset, moonrise or moonset can be a minute or two out. With no city chosen the page is as before and counts down to greatest eclipse.
+- **Private**: no cookies, no tracking, no request leaves the page. Nothing is stored unless you choose a city: then, on the website, that one city (its name, country, coordinates and time zone from the city list) is kept in this browser's localStorage under `eclipsetracker.city` (the same record as MeteorWatch keeps under `meteorwatch.city`: `v` 1, name, country, latitude, longitude and time zone), never sent anywhere, and removed with the Clear city button. The Android app stores nothing on the page's side. The page's own Content-Security-Policy allows no connection at all.
 
 ## Data
-The list comes from Fred Espenak's catalogue at NASA Goddard Space Flight Center (eclipse.gsfc.nasa.gov, public domain): the Five Millennium Canon catalogues for 2001 to 2100 and the decade tables for 2021 to 2100. The pages are archived byte for byte in `tools/nasa/` with their URLs, fetch times and SHA-256 hashes (`tools/nasa/FETCHLOG.tsv`). `tools/build-eclipse-data.py` turns them into `ts/core/data.ts` and `data/eclipses.json`, cross-checking every eclipse between the two sources; the tests count the eclipses per decade against the decade tables. Times are UTC, the catalogue's Terrestrial Dynamical Time minus its own Delta T, shown to the minute.
+The list comes from Fred Espenak's catalogue at NASA Goddard Space Flight Center (eclipse.gsfc.nasa.gov, free to reproduce with an acknowledgment): the Five Millennium Canon catalogues for 2001 to 2100 and the decade tables for 2021 to 2100. The pages are archived byte for byte in `tools/nasa/` with their URLs, fetch times and SHA-256 hashes (`tools/nasa/FETCHLOG.tsv`). `tools/build-eclipse-data.py` turns them into `ts/core/data.ts` and `data/eclipses.json`, cross-checking every eclipse between the two sources; the tests count the eclipses per decade against the decade tables. Times are UTC, the catalogue's Terrestrial Dynamical Time minus its own Delta T, shown to the minute.
+
+### Local circumstances
+
+With a city chosen, the page works out each eclipse as seen from there (`ts/core/local.ts`, pure functions with no DOM). The solar part uses NASA's Besselian elements (Fred Espenak and Jean Meeus, Five Millennium Canon of Solar Eclipses) and the standard method: the observer on the fundamental plane, the penumbral and umbral cone radii there, and the four contacts. The lunar part uses NASA's lunar eclipse elements (contact times and the Moon's position). The Sun counts as up above -0.833 degrees and the Moon when its upper limb is above the refracted horizon; a window is sampled every 60 s and narrowed to 1 s. Where the body sets and rises again inside one eclipse (66 degrees of latitude or more) the start is the first moment it is up, the end the last, the maximum is the moment of greatest eclipse if the body is up then and else the end of an up stretch nearest to it, and the page says the body sets and rises again. The element files are archived byte for byte in `tools/nasa-elements/` (with `.txt` names, so that no JavaScript is tracked) and `tools/build-local-elements.py` writes `ts/core/elements.ts` from them after checking every set against the eclipse list (date, time of greatest eclipse, Delta T, type, magnitudes, contacts and the durations in the archived catalogue). `tools/vectors/build-local-vectors.py` is a separate Python implementation of the method (it shares the element parser and the T0 rule with `tools/build-local-elements.py`) that writes `tests/local-vectors.json` (16 cities, all 337 eclipses); `tests/local.test.ts` replays it, and also checks NASA's own catalogue values and the table of cities published for the total eclipse of 2026-08-12. The program code of NASA's explorers (GPL) is not used: only its published numbers.
+
+The city list is the shared Stormberry Labs catalogue, `cities.js` (25,007 cities), written by SunApp's `update_cities.py` and copied here byte for byte; the page adds it only when the city chooser is first used, and decodes it only when the first search reads it. The search is MoonApp's (`ts/core/citysearch.ts`), checked against MoonApp's 162 captured results.
 
 ## Architecture
 - **TypeScript**, compiled with a pinned TypeScript 6.0.3 (`package-lock.json`) into the JavaScript the page loads: `ts/app.ts` becomes `app.js`, `ts/core/*.ts` become `core/*.js`. ES modules, no framework, no runtime dependency. The compiled files are committed, because GitHub Pages publishes the repository as it is. Edit `ts/`, never the `.js`.
@@ -111,6 +118,9 @@ tools/build-ts.sh            # compile ts/ and the Android bridge script, type-c
 tools/build-ts.sh --check    # fail if the compiled JavaScript (the bridge's included), the eclipse list or a ?v= stamp is stale, a stray .js is left, or a test does not type-check
 tools/test-build-check.sh    # prove the check fails on each defect it exists to catch
 python3 -I tools/vectors/build-vectors.py --check   # the test vectors against Python's zoneinfo
+python3 -I tools/build-local-elements.py --check    # ts/core/elements.ts against the NASA element files in tools/nasa-elements/
+python3 -I tools/vectors/build-local-vectors.py --check   # tests/local-vectors.json against the separate Python implementation
+python3 -I tools/check-city-catalogue.py            # cities.js: header, 25,007 rows, byte for byte SunApp's copy when it is beside this one
 node --test tests/*.test.ts  # unit tests (npm test)
 node tests/smoke.ts          # headless Chromium smoke test on a frozen clock (needs /usr/bin/chromium)
 node tests/app-mode-smoke.ts # the page as the Android app loads it, with the bridge script
@@ -119,6 +129,13 @@ python3 tests/serve.py       # serve the site locally with the production header
 
 ## Credits
 Built by [Stormberry AS](https://stormberry.as). Proudly powered by sovereign AI agents.
+
+| Project | What it provides | Licence |
+|---|---|---|
+| [GeoNames](https://www.geonames.org/) and [Kartverket](https://www.kartverket.no/en/api-and-data) | The city catalogue (`cities.js`) | CC BY 4.0 |
+| Fred Espenak, NASA's Goddard Space Flight Center | The eclipse catalogue and decade tables (`tools/nasa/`) | Free to reproduce with the acknowledgment NASA asks for |
+| Fred Espenak, Jean Meeus and Chris O'Byrne, NASA's GSFC | Eclipse elements for local circumstances (`tools/nasa-elements/`): Besselian elements of the solar eclipses and lunar eclipse elements, from the Five Millennium Canons | Free to reproduce with the acknowledgment NASA asks for: "Eclipse Predictions by Fred Espenak and Chris O'Byrne (NASA's GSFC)" |
+| [Inter](https://rsms.me/inter/) | The typeface | SIL OFL 1.1 |
 
 ## Disclaimer
 

@@ -30,7 +30,7 @@
   <!-- Local Fonts: Inter -->
   <link rel="stylesheet" href="fonts/inter/inter.css?v=868d674e" />
 
-  <link rel="stylesheet" href="style.css?v=a52764ab" />
+  <link rel="stylesheet" href="style.css?v=c877da04" />
   <link rel="canonical" href="https://eclipse.stormberry.as/" />
   
   <meta property="og:title" content="EclipseTracker | Every Solar and Lunar Eclipse to 2100" />
@@ -59,8 +59,9 @@
 
     <section class="card" aria-labelledby="eclipse-type">
       <div class="countdown-section">
-        <p class="eyebrow">Next eclipse</p>
+        <p class="eyebrow" id="countdown-eyebrow">Next eclipse</p>
         <h2 id="eclipse-type">Loading the eclipse list</h2>
+        <p class="countdown-to" id="countdown-to">Greatest eclipse in</p>
         <!-- Each number with its label under it; the groups wrap at narrow widths and large text
              instead of being cut off (code review C-8). The labels are hidden from screen readers,
              which read the sentence in #countdown-words instead. -->
@@ -75,8 +76,20 @@
 
       <dl class="event-details" id="event-details">
         <div class="event-row">
-          <dt class="event-label">Date</dt>
+          <dt class="event-label" id="eclipse-date-label">Date</dt>
           <dd class="event-value" id="eclipse-date"></dd>
+        </div>
+        <div class="event-row" id="eclipse-max-row" hidden>
+          <dt class="event-label">Maximum</dt>
+          <dd class="event-value" id="eclipse-max"></dd>
+        </div>
+        <div class="event-row" id="eclipse-end-row" hidden>
+          <dt class="event-label">Ends</dt>
+          <dd class="event-value" id="eclipse-end"></dd>
+        </div>
+        <div class="event-row" id="eclipse-seen-row" hidden>
+          <dt class="event-label">Seen as</dt>
+          <dd class="event-value" id="eclipse-seen"></dd>
         </div>
         <div class="event-row">
           <dt class="event-label">Visibility Region</dt>
@@ -100,9 +113,34 @@
       </div>
     </section>
 
+    <!-- The city filter (11 November 2026), after the countdown card as in MeteorWatch. Hidden until the
+         script knows it can be used: on the website always, in the Android app only when the app's
+         bridge offers it. The shared Labs city catalogue (cities.js) is added to the page the first
+         time the search box is used. It is a card in all but its class: the Android bridge puts the
+         app's overview after the first `main .card`, which must stay the countdown card. -->
+    <section class="city-card" id="city-card" aria-labelledby="city-heading" hidden>
+      <h2 id="city-heading" class="list-heading">Filter by city</h2>
+      <p class="list-intro" id="city-intro">Choose a city to see only the eclipses that can be seen from there, with their times in that city's time zone.</p>
+      <label for="city-search" class="field-label">Search city or country</label>
+      <div class="search-wrapper">
+        <svg class="search-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+          <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/>
+        </svg>
+        <input type="search" id="city-search" class="search-input" role="combobox" placeholder="e.g. Bergen, Tokyo" autocomplete="off" spellcheck="false" aria-autocomplete="list" aria-controls="city-dropdown" aria-expanded="false" aria-describedby="city-intro city-privacy" />
+        <ul id="city-dropdown" class="dropdown" role="listbox" aria-label="City suggestions" hidden></ul>
+      </div>
+      <div id="city-selected" class="selected-city" hidden>
+        <span id="city-selected-text"></span>
+        <button type="button" id="city-clear-btn" class="clear-btn">Clear city</button>
+      </div>
+      <p id="city-status" class="city-status" role="status" aria-live="polite"></p>
+      <p class="city-note">A solar eclipse counts as seen when the Sun is above the horizon there during some of it. A lunar eclipse counts as seen when the Moon is above the horizon there while the Earth's dark shadow is on it, or, for a faint penumbral eclipse, while the Earth's pale outer shadow is on it. The countdown then runs to the moment it starts there: first contact, or sunrise or moonrise if the eclipse is already under way. Worked out for sea level and a flat, clear horizon: hills, buildings and clouds can hide an eclipse, and a time close to sunrise, sunset, moonrise or moonset can be a minute or two out.</p>
+      <p class="city-note" id="city-privacy"></p>
+    </section>
+
     <section class="card list-card" aria-labelledby="list-heading">
       <h2 id="list-heading" class="list-heading" tabindex="-1">Every eclipse to 2100</h2>
-      <p class="list-intro">Solar and lunar eclipses from NASA's eclipse catalogue, with the time of greatest eclipse in your own time zone. Open a year to see its eclipses.</p>
+      <p class="list-intro" id="list-intro">Solar and lunar eclipses from NASA's eclipse catalogue, with the time of greatest eclipse in your own time zone. Open a year to see its eclipses.</p>
       <div class="filters">
         <label class="field">
           <span class="field-label">Show</span>
@@ -121,7 +159,7 @@
       </div>
       <p class="list-count" id="list-count" role="status"></p>
       <div id="eclipse-list" class="eclipse-list"></div>
-      <p class="list-source">Source: Fred Espenak, NASA Goddard Space Flight Center, eclipse catalogue and decade tables at eclipse.gsfc.nasa.gov. Times are rounded to the minute. Even for the next few years they may be a minute out, because the catalogue's estimate of the Earth's rotation differs by a few seconds from what has been measured since; for eclipses decades away the difference can grow to a few minutes.</p>
+      <p class="list-source">Source: Fred Espenak, NASA Goddard Space Flight Center, eclipse catalogue and decade tables at eclipse.gsfc.nasa.gov. Times are rounded to the minute. Even for the next few years they may be a minute out, because the catalogue's estimate of the Earth's rotation differs by a few seconds from what has been measured since; for eclipses decades away the difference can grow to a few minutes. Local times for a city: Besselian elements and lunar eclipse elements from the Five Millennium Canons (Fred Espenak and Jean Meeus); Eclipse Predictions by Fred Espenak and Chris O'Byrne (NASA's GSFC).</p>
     </section>
 
     <!-- ANDROID APP: links to the store listings (2026-10-30). data-web-only: the bridge script
@@ -152,7 +190,7 @@
         <button type="button" id="save-ics" class="btn btn-primary">Save the calendar file</button>
         <button type="button" id="close-planner" class="btn btn-secondary">Close</button>
       </div>
-      <p class="planner-note">Open the saved file with your calendar app: your calendar keeps the eclipse and rings the alarms. Some calendars, Google Calendar among them, leave out the alarms in a file and use their own reminders instead. EclipseTracker sends nothing and keeps nothing.</p>
+      <p class="planner-note" id="planner-note">Open the saved file with your calendar app: your calendar keeps the eclipse and rings the alarms. Some calendars, Google Calendar among them, leave out the alarms in a file and use their own reminders instead. EclipseTracker sends nothing and keeps nothing.</p>
     </div>
   </dialog>
 
@@ -384,7 +422,7 @@
         <p class="footer-tagline">Smarter sales. Global culture. AI-driven strategy.</p>
       </div>
       <div class="footer-powered">
-        <p>Powered by NASA's eclipse catalogue (Fred Espenak, NASA GSFC), built into the page. Runs entirely in your browser.</p>
+        <p>Powered by NASA's eclipse catalogue (Fred Espenak, NASA GSFC) and the Five Millennium Canon eclipse elements (Fred Espenak and Jean Meeus), built into the page, and city data from <a href="https://www.geonames.org/" target="_blank" rel="noopener">GeoNames</a> and <a href="https://www.kartverket.no/en/api-and-data" target="_blank" rel="noopener">Kartverket</a> (<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC&nbsp;BY&nbsp;4.0</a>). Runs entirely in your browser.</p>
       </div>
     </div>
     <div class="footer-bottom">
@@ -400,6 +438,6 @@
     </div>
   </footer>
 
-  <script type="module" src="app.js?v=89825ffe"></script>
+  <script type="module" src="app.js?v=c2d50fad"></script>
 </body>
 </html>

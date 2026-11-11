@@ -274,6 +274,12 @@ await check('the bridge says hello, the page starts with the app parts, and noth
   assert.deepEqual(p.log.offsite, []);
   assert.equal(await p.ev('localStorage.length + sessionStorage.length'), 0);
   assert.equal(await p.ev('document.cookie'), '');
+  // The city filter (11 November 2026) stays out of the app until the bridge offers it: the chooser is hidden, the
+  // catalogue is never requested and nothing is stored.
+  assert.equal(await p.ev("document.getElementById('city-card').hidden"), true);
+  assert.equal(await p.ev("document.getElementById('countdown-to').textContent"), 'Greatest eclipse in');
+  assert.equal(p.log.requests.some((r) => r.url.includes('cities.js')), false);
+  assert.equal(await p.ev("'CITIES' in globalThis"), false);
 });
 
 await check("the planner gains Set ringing alarms and Add to calendar, and shows the app's travel note", async () => {
@@ -551,7 +557,8 @@ await check('the whole page in app mode keeps the house style, with no error, vi
   assert.deepEqual(await p.ev('window.__csp'), []);
   assert.deepEqual(p.log.offsite, []);
   assert.equal(await p.ev('localStorage.length + sessionStorage.length'), 0);
-  assert.equal(await p.ev("[...document.querySelectorAll('[aria-live]:not([aria-live=\"off\"]), [role=status]')].map((n) => n.id).sort().join(' ')"), 'app-alarms-status list-count planner-live');
+  // The city chooser's status line is in the page but inside the hidden city card, so nothing there is announced (11 November 2026).
+  assert.equal(await p.ev("[...document.querySelectorAll('[aria-live]:not([aria-live=\"off\"]), [role=status]')].filter((n) => !n.closest('[hidden]')).map((n) => n.id).sort().join(' ')"), 'app-alarms-status list-count planner-live');
 });
 await p.close();
 
@@ -739,6 +746,8 @@ await check('the Google Play edition: Add to calendar after Save, nothing about 
   assert.deepEqual(await g.ev('window.__csp'), []);
   assert.deepEqual(g.log.offsite, []);
   assert.equal(await g.ev('localStorage.length + sessionStorage.length'), 0);
+  assert.equal(await g.ev("document.getElementById('city-card').hidden"), true, 'the Play edition hides the city chooser too');
+  assert.equal(g.log.requests.some((r) => r.url.includes('cities.js')), false);
   await g.close();
 });
 
