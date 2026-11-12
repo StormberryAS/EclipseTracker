@@ -33,6 +33,11 @@
 #
 # CHANGELOG.md (EclipseTracker for Android 2.0.1, 29 October 2026): the Android release log, a
 # document for the repository like README.md, not a page of the website.
+#
+# theme: null (EclipseTracker for Android 2.1.0, 12 November 2026, as the Labs apps since 2026-11-06):
+# GitHub Pages no longer publishes its default Primer stylesheet, /assets/css/style.css, which is in no
+# repository and is not Inter. Never add .nojekyll: it turns the exclusions off.
+theme: null
 exclude:
   - CHANGELOG.md
   - DISCLAIMER.md

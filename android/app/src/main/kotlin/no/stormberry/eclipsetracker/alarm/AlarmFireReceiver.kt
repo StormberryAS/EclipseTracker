@@ -70,7 +70,7 @@ class AlarmFireReceiver : BroadcastReceiver() {
                         recordId = record!!.id,
                         eclipseId = record.eclipseId,
                         title = eclipse?.let { Words.eclipseName(it) } ?: context.getString(R.string.alarm_default_title),
-                        text = Words.alarmWords(record.spec),
+                        text = Words.alarmWords(record),
                         fireAt = if (fireAt > 0L) fireAt else now,
                     )
                     handedOff = ring(context, alarm)

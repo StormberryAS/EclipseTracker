@@ -34,6 +34,13 @@
 //     rings (the app's armed time, or worked out), Change opens the planner with that eclipse's
 //     alarms, Delete removes one; the problems with their fix buttons (problem.fix);
 //   * Back closes an open planner (handled) and otherwise lets the app close;
+//   * the city (EclipseTracker 2.1.0, both editions): the chooser is shown, city.get restores the kept
+//     city without loading the catalogue, a pick sends city.set with the six-key text, Clear city sends
+//     it with null, no DOM storage or cookie is touched; with a city chosen the ringing alarms are
+//     version 2 records (the start at the city, its zone and its name), the overview names the city,
+//     a version 1 record still shows and changes as before; Change on an eclipse the city cannot see
+//     keeps version 1 records, the greatest-eclipse words and the calendar file with no city (plan
+//     Q4); the Play edition keeps the city and the city calendar file and sends no alarm message;
 //   * a change of time zone: the planner's line, the overview's times and a fresh alarms.list;
 //     fix D (N-2): also when the zone changes before the bridge's first look, in the first minute;
 //   * fix C: the text enlarged as the app does it (TextScale.kt) at 1.3, 1.5 and 2.0, at 320 px and
@@ -174,7 +181,7 @@ const ORIGIN = `http://127.0.0.1:${address.port}`;
 // problems, mode (per type: set 'ok' | 'fail'; add 'calendar' | 'share' | 'fail'; save 'ok' |
 // 'cancel' | 'fail'), send(msg) (a message from the app).
 const STUB = `(() => {
-  const et = window.__et = { posted: [], records: [], armed: [], problems: [], mode: {} };
+  const et = window.__et = { posted: [], records: [], armed: [], problems: [], mode: {}, city: window.__keptCity === undefined ? null : window.__keptCity };
   const listeners = new Set();
   const send = et.send = (msg) => { msg.v = 1; const data = JSON.stringify(msg); listeners.forEach((fn) => fn({ data })); };
   const alarms = (id, ok) => ({ type: 'alarms', ...(id ? { id } : {}), ok, records: et.records, armed: et.armed, problems: et.problems });
@@ -184,6 +191,12 @@ const STUB = `(() => {
       if (et.mode.set === 'fail') { send(alarms(m.id, false)); return; }
       et.records = et.records.filter((r) => r.eclipseId !== m.eclipseId).concat(m.records);
       send(alarms(m.id, true));
+    } else if (m.type === 'city.get') {
+      send({ type: 'city', id: m.id, ok: et.mode.cityGet !== 'fail', ...(et.mode.cityGet === 'fail' ? {} : { city: et.city }) });
+    } else if (m.type === 'city.set') {
+      if (et.mode.citySet === 'fail') { send({ type: 'city', id: m.id, ok: false }); return; }
+      et.city = m.city;
+      send({ type: 'city', id: m.id, ok: true });
     } else if (m.type === 'calendar.add') {
       const mode = et.mode.add || 'calendar';
       send({ type: 'calendar.result', id: m.id, ok: mode !== 'fail', via: mode === 'share' ? 'share' : 'calendar' });
@@ -204,8 +217,9 @@ const work = mkdtempSync(join(tmpdir(), 'eclipse-app-mode-'));
 const downloads = join(work, 'downloads');
 mkdirSync(downloads, { recursive: true });
 const browser = await launchChromium({ chromium: CHROMIUM, out: join(work, 'chromium') });
-const open = (path: string, { stub = true, width = 1280, height = 900, timezone = 'Europe/Oslo', now = NOW }: { stub?: boolean; width?: number; height?: number; timezone?: string; now?: number } = {}): Promise<Page> =>
-  openPage(browser, `${ORIGIN}${path}`, { width, height, timezone, base: ORIGIN, downloads, init: stub ? `${clockAt(now)}\n${STUB}` : clockAt(now) });
+/** `kept`: the city text the app's preferences hold when the page starts (null for none). */
+const open = (path: string, { stub = true, width = 1280, height = 900, timezone = 'Europe/Oslo', now = NOW, kept = null }: { stub?: boolean; width?: number; height?: number; timezone?: string; now?: number; kept?: string | null } = {}): Promise<Page> =>
+  openPage(browser, `${ORIGIN}${path}`, { width, height, timezone, base: ORIGIN, downloads, init: stub ? `${clockAt(now)}\nwindow.__keptCity = ${J(kept)};\n${STUB}` : clockAt(now) });
 
 let passed = 0;
 async function cleanup(): Promise<void> {
@@ -274,9 +288,11 @@ await check('the bridge says hello, the page starts with the app parts, and noth
   assert.deepEqual(p.log.offsite, []);
   assert.equal(await p.ev('localStorage.length + sessionStorage.length'), 0);
   assert.equal(await p.ev('document.cookie'), '');
-  // The city filter (11 November 2026) stays out of the app until the bridge offers it: the chooser is hidden, the
-  // catalogue is never requested and nothing is stored.
-  assert.equal(await p.ev("document.getElementById('city-card').hidden"), true);
+  // The city filter (2.1.0) is offered by the bridge in the app: the chooser is shown with the app's line, the kept city
+  // was asked for, and with none the catalogue is never requested and the page counts to greatest eclipse as before.
+  assert.equal(await p.ev("document.getElementById('city-card').hidden"), false);
+  assert.equal(await p.ev("document.getElementById('city-privacy').textContent"), 'Your city stays on this phone only. Clear it with the Clear city button.');
+  assert.ok((await posted(p, 'city.get')).length >= 1, 'the kept city was asked for');
   assert.equal(await p.ev("document.getElementById('countdown-to').textContent"), 'Greatest eclipse in');
   assert.equal(p.log.requests.some((r) => r.url.includes('cities.js')), false);
   assert.equal(await p.ev("'CITIES' in globalThis"), false);
@@ -557,8 +573,8 @@ await check('the whole page in app mode keeps the house style, with no error, vi
   assert.deepEqual(await p.ev('window.__csp'), []);
   assert.deepEqual(p.log.offsite, []);
   assert.equal(await p.ev('localStorage.length + sessionStorage.length'), 0);
-  // The city chooser's status line is in the page but inside the hidden city card, so nothing there is announced (11 November 2026).
-  assert.equal(await p.ev("[...document.querySelectorAll('[aria-live]:not([aria-live=\"off\"]), [role=status]')].filter((n) => !n.closest('[hidden]')).map((n) => n.id).sort().join(' ')"), 'app-alarms-status list-count planner-live');
+  // The city chooser is shown in the app (2.1.0), so its status line is one of the page's live regions.
+  assert.equal(await p.ev("[...document.querySelectorAll('[aria-live]:not([aria-live=\"off\"]), [role=status]')].filter((n) => !n.closest('[hidden]')).map((n) => n.id).sort().join(' ')"), 'app-alarms-status city-status list-count planner-live');
 });
 await p.close();
 
@@ -690,6 +706,317 @@ await check('fix B, A-9: Change works for an alarm kept after greatest eclipse; 
   await m.close();
 });
 
+// ==== The city in the app (EclipseTracker 2.1.0) ===============================================
+const BERGEN_TEXT = '{"v":1,"name":"Bergen","country":"Norway","lat":60.393,"lon":5.3242,"tz":"Europe/Oslo"}';
+const SYDNEY_TEXT = '{"v":1,"name":"Sydney","country":"Australia","lat":-33.8678,"lon":151.2073,"tz":"Australia/Sydney"}';
+const cityText = (c: Page, id: string): Promise<string> => c.ev(`document.getElementById(${J(id)}).textContent`);
+const catalogueRequests = (c: Page): number => c.log.requests.filter((r) => r.url.includes('cities.js')).length;
+/** Types a name into the chooser and picks the first suggestion with the keyboard, as a person does. */
+async function pickFirst(c: Page, typed: string): Promise<void> {
+  await c.type('#city-search', typed);
+  assert.ok(await c.waitFor("document.querySelectorAll('#city-dropdown li').length > 0"), `suggestions for ${typed}`);
+  await c.key('ArrowDown');
+  await c.key('Enter');
+  await sleep(250);
+}
+const openEclipse = async (c: Page, id: string): Promise<void> => {
+  await c.ev(`(() => { const b = document.querySelector('.btn-alarm[data-id="${id}"]'); b.closest('details').open = true; })()`);
+  await c.click(`.btn-alarm[data-id="${id}"]`);
+  await c.waitFor("document.getElementById('planner').open");
+};
+
+await check('the city in the app: asked for at start; with none kept the page is as before; a kept city is restored without loading the catalogue', async () => {
+  const n = await open('/app/');
+  assert.equal(await cityText(n, 'countdown-to'), 'Greatest eclipse in');
+  assert.equal(await n.ev("document.getElementById('city-selected').hidden"), true);
+  assert.equal(catalogueRequests(n), 0);
+  const gets = await posted(n, 'city.get');
+  assert.equal(gets.length, 1);
+  assert.match(String(gets[0]?.id), /^\d+$/);
+  assert.deepEqual(Object.keys(gets[0] ?? {}).sort(), ['id', 'type', 'v']);
+  await n.close();
+  const k = await open('/app/', { kept: BERGEN_TEXT });
+  await k.waitFor("document.getElementById('countdown-to').textContent === 'Starts in'", 4000);
+  assert.equal(await cityText(k, 'city-selected-text'), 'Bergen, Norway');
+  assert.equal(await cityText(k, 'countdown-eyebrow'), 'Next eclipse seen from Bergen');
+  assert.equal(catalogueRequests(k), 0, 'no cities.js request for a kept city');
+  assert.equal(await k.ev("'CITIES' in globalThis"), false);
+  assert.match(await cityText(k, 'list-count'), /^\d+ eclipses seen from Bergen in \d+ years\.$/);
+  // Clear city is 48 px in the app (the website keeps 44).
+  assert.ok(await k.ev("document.getElementById('city-clear-btn').getBoundingClientRect().height >= 47.5"), 'Clear city is at least 48 px tall');
+  // A text that is not a city is ignored: the page is as without a city.
+  const junk = await open('/app/', { kept: '{"v":1,"name":"x"}' });
+  await sleep(400);
+  assert.equal(await cityText(junk, 'countdown-to'), 'Greatest eclipse in');
+  await junk.close();
+  assert.equal(await k.ev('localStorage.length + sessionStorage.length'), 0, 'no DOM storage');
+  assert.equal(await k.ev('document.cookie'), '');
+  assert.deepEqual(k.log.errors, []);
+  assert.deepEqual(k.log.csp, []);
+  await k.close();
+});
+
+await check('the city in the app: a pick sends city.set with the six-key text, Clear city sends null and returns the focus, nothing is stored by the page', async () => {
+  const c = await open('/app/');
+  await pickFirst(c, 'sydney');
+  assert.equal(await cityText(c, 'city-selected-text'), 'Sydney, Australia');
+  assert.equal(catalogueRequests(c), 1, 'the catalogue is loaded once, on first use');
+  const sets = await posted(c, 'city.set');
+  assert.equal(sets.length, 1);
+  assert.deepEqual(Object.keys(sets[0] ?? {}).sort(), ['city', 'id', 'type', 'v']);
+  assert.equal(sets[0]?.city, SYDNEY_TEXT);
+  assert.deepEqual(Object.keys(JSON.parse(sets[0]?.city)), ['v', 'name', 'country', 'lat', 'lon', 'tz']);
+  assert.equal(await c.ev('window.__et.city'), SYDNEY_TEXT);
+  assert.equal(await cityText(c, 'city-privacy'), 'Your city stays on this phone only. Clear it with the Clear city button.');
+  assert.equal(await cityText(c, 'countdown-to'), 'Starts in');
+  await c.click('#city-clear-btn');
+  await sleep(200);
+  const after = await posted(c, 'city.set');
+  assert.equal(after.length, 2);
+  assert.equal(after[1]?.city, null);
+  assert.deepEqual(Object.keys(after[1] ?? {}).sort(), ['city', 'id', 'type', 'v']);
+  assert.equal(await c.ev('window.__et.city'), null);
+  assert.equal(await cityText(c, 'city-status'), 'Showing every eclipse.');
+  assert.equal(await cityText(c, 'countdown-to'), 'Greatest eclipse in');
+  assert.equal(await c.ev('document.activeElement.id'), 'city-search');
+  assert.equal(await c.ev('localStorage.length + sessionStorage.length'), 0);
+  assert.equal(await c.ev('document.cookie'), '');
+  assert.deepEqual(c.log.errors, []);
+  assert.deepEqual(c.log.csp, []);
+  assert.deepEqual(c.log.offsite, []);
+  await c.close();
+});
+
+await check('the city in the app: the app refuses to keep the city, and the page says so and keeps the city for the visit', async () => {
+  const c = await open('/app/');
+  await c.ev("window.__et.mode.citySet = 'fail'");
+  await pickFirst(c, 'sydney');
+  assert.equal(await cityText(c, 'city-selected-text'), 'Sydney, Australia', 'the city works for this visit');
+  assert.equal(await c.ev('window.__et.city'), null, 'the app kept nothing');
+  assert.deepEqual(c.log.errors, []);
+  await c.close();
+});
+
+let sydneyRecords: Array<{ v: number; id: string; eclipseId: string; spec: unknown; start: string; zone: string; place: string }> = [];
+await check('ringing alarms with a city chosen are version 2 records: the start at the city, its zone and its name; the default is 1 day before at 12:00', async () => {
+  const c = await open('/app/', { kept: SYDNEY_TEXT });
+  await c.waitFor("document.getElementById('countdown-to').textContent === 'Starts in'", 4000);
+  await openEclipse(c, '2027-07-18-lunar');
+  // The penumbral lunar eclipse of 18 July 2027 starts at 15:57 UTC, which is 01:57 on 19 July in Sydney (UTC+10).
+  assert.equal(await cityText(c, 'planner-when'), 'Starts in Sydney: Monday 19 July 2027 at 01:57 (UTC+10), which is 15:57 UTC.');
+  assert.equal(await c.ev("document.querySelectorAll('.alarm-row').length"), 1);
+  assert.equal(await c.ev("document.querySelector('.alarm-choice').value"), 'day-1', 'the default is 1 day before');
+  assert.equal(await c.ev("document.querySelector('.alarm-time').value"), '12:00');
+  assert.match(await c.ev("document.querySelector('.alarm-result').textContent"), /^Rings Sunday 18 July 2027 at 12:00 \(UTC\+10\)\./);
+  // Add a second alarm, 30 minutes before the start.
+  await c.ev("document.getElementById('add-alarm').click()");
+  await setSelect(c, "document.querySelectorAll('.alarm-choice')[1]", 'before');
+  await c.click('#app-set');
+  await waitStatus(c, T.SET_MANY.replace('{n}', '2'));
+  const m = (await posted(c, 'alarms.set')).at(-1);
+  assert.equal(m.eclipseId, '2027-07-18-lunar');
+  assert.equal(m.records.length, 2);
+  for (const r of m.records) {
+    assert.deepEqual(Object.keys(r).sort(), ['eclipseId', 'id', 'place', 'spec', 'start', 'v', 'zone']);
+    assert.equal(r.v, 2);
+    assert.match(r.id, RECORD_ID);
+    assert.equal(r.start, '2027-07-18T15:57:00Z', 'the very minute the planner shows');
+    assert.equal(r.zone, 'Australia/Sydney');
+    assert.equal(r.place, 'Sydney, Australia');
+  }
+  assert.deepEqual(m.records[0].spec, { kind: 'day', daysBefore: 1, time: '12:00' });
+  assert.deepEqual(m.records[1].spec, { kind: 'before', minutes: 30 });
+  sydneyRecords = m.records;
+  await c.key('Escape');
+  // The overview names the city and shows the ring times in the phone's zone (Oslo): 12:00 in Sydney on 18 July is 04:00 in Oslo.
+  await c.waitFor("document.querySelectorAll('#app-alarms-list li').length === 2");
+  const text = await c.ev("document.getElementById('app-alarms-list').innerText");
+  assert.match(text, /1 day before at 12:00 in Sydney, Australia/);
+  assert.match(text, /30 minutes before the eclipse starts in Sydney, Australia/);
+  assert.match(text, /Rings Sunday 18 July 2027 at 04:00 \(UTC\+2\)\./, 'the ring time is shown in the phone\'s zone, where the phone is');
+  assert.match(text, /Rings Sunday 18 July 2027 at 17:27 \(UTC\+2\)\./);
+  houseStyle(text, 'overview with a city');
+  // The overview's Change opens the planner with the stored rows; setting again keeps the record ids.
+  await c.ev("document.querySelector('#app-alarms-list li button').click()");
+  await c.waitFor("document.getElementById('planner').open && document.querySelectorAll('.alarm-row').length === 2");
+  await c.click('#app-set');
+  await c.waitFor(`window.__et.posted.filter((x) => x.type === 'alarms.set').length === 2`);
+  const again = (await posted(c, 'alarms.set')).at(-1);
+  assert.deepEqual(again.records.map((r: FromBrowser) => r.id), m.records.map((r: FromBrowser) => r.id));
+  assert.equal(again.records[0].v, 2);
+  assert.deepEqual(c.log.errors, []);
+  assert.deepEqual(c.log.csp, []);
+  await c.close();
+});
+
+await check('a version 1 alarm still shows and changes as before; changing it with a city chosen makes it version 2 under the same id', async () => {
+  const c = await open('/app/', { kept: SYDNEY_TEXT });
+  await c.waitFor("document.getElementById('countdown-to').textContent === 'Starts in'", 4000);
+  const v1 = { v: 1, id: 'abcdefabcdefabcdefabcdefabcdef02', eclipseId: '2027-07-18-lunar', spec: { kind: 'day', daysBefore: 0, time: '12:00' } };
+  await c.ev(`window.__et.records = [${J(v1)}]; window.__et.send({ type: 'alarms', ok: true, records: window.__et.records, armed: [], problems: [] })`);
+  await c.waitFor("document.querySelectorAll('#app-alarms-list li').length === 1");
+  const text = await c.ev("document.getElementById('app-alarms-list').innerText");
+  assert.match(text, /On the day of the eclipse at 12:00(?! in)/, 'the version 1 words name no city');
+  assert.match(text, /Rings Sunday 18 July 2027 at 12:00 \(UTC\+2\)\./, 'a version 1 alarm rings at 12:00 where the phone is');
+  await c.ev("document.querySelector('#app-alarms-list li button').click()");
+  await c.waitFor("document.getElementById('planner').open && document.querySelectorAll('.alarm-row').length === 1");
+  await c.click('#app-set');
+  await waitStatus(c, T.SET_ONE);
+  const set = (await posted(c, 'alarms.set')).at(-1);
+  assert.equal(set.records[0].id, v1.id, 'the id stays, so the request code stays and no alarm rings twice');
+  assert.equal(set.records[0].v, 2);
+  assert.equal(set.records[0].zone, 'Australia/Sydney');
+  await c.close();
+  // With no city the same change keeps a version 1 record.
+  const n = await open('/app/');
+  await n.ev(`window.__et.records = [${J(v1)}]; window.__et.send({ type: 'alarms', ok: true, records: window.__et.records, armed: [], problems: [] })`);
+  await n.waitFor("document.querySelectorAll('#app-alarms-list li').length === 1");
+  await n.ev("document.querySelector('#app-alarms-list li button').click()");
+  await n.waitFor("document.getElementById('planner').open && document.querySelectorAll('.alarm-row').length === 1");
+  await n.click('#app-set');
+  await waitStatus(n, T.SET_ONE);
+  assert.deepEqual(Object.keys((await posted(n, 'alarms.set')).at(-1).records[0]).sort(), ['eclipseId', 'id', 'spec', 'v']);
+  assert.equal((await posted(n, 'alarms.set')).at(-1).records[0].v, 1);
+  await n.close();
+});
+
+await check('plan Q4: Change on an eclipse the chosen city cannot see keeps version 1, the greatest-eclipse words and header, and the 2.0.1 calendar file; a seen eclipse still gets version 2', async () => {
+  // Sydney cannot see the annular eclipse of 6 February 2027 (greatest eclipse 16:00 UTC, 17:00 in Oslo); it sees 18 July 2027.
+  const unseen = [
+    { v: 1, id: 'abcdefabcdefabcdefabcdefabcdef11', eclipseId: '2027-02-06-solar', spec: { kind: 'day', daysBefore: 0, time: '12:00' } },
+    { v: 1, id: 'abcdefabcdefabcdefabcdefabcdef12', eclipseId: '2027-02-06-solar', spec: { kind: 'before', minutes: 30 } },
+  ];
+  const seenV1 = { v: 1, id: 'abcdefabcdefabcdefabcdefabcdef13', eclipseId: '2027-07-18-lunar', spec: { kind: 'day', daysBefore: 0, time: '12:00' } };
+  const changeOn = async (pg: Page, id: string, rows: number): Promise<void> => {
+    await pg.click(`#app-alarms-list button[data-key="change-${id}"]`);
+    await pg.waitFor(`document.getElementById('planner').open && document.querySelectorAll('.alarm-row').length === ${rows}`);
+  };
+  /** What the planner shows, and the calendar file Add to calendar sends, with its UID and DTSTAMP left out. */
+  const plannerView = async (pg: Page): Promise<{ when: string; zone: string; results: string[]; labels: string[]; ics: string }> => {
+    const view = {
+      when: await cityText(pg, 'planner-when'),
+      zone: await cityText(pg, 'planner-zone'),
+      results: await pg.ev("[...document.querySelectorAll('.alarm-result')].map((n) => n.textContent)") as string[],
+      labels: await pg.ev("[...document.querySelector('.alarm-choice').options].map((o) => o.textContent)") as string[],
+    };
+    const count = (await posted(pg, 'calendar.add')).length;
+    await pg.click('#app-calendar');
+    await pg.waitFor(`window.__et.posted.filter((x) => x.type === 'calendar.add').length === ${count + 1}`);
+    const ics = String((await posted(pg, 'calendar.add')).at(-1).ics).replace(/\r\n /g, '').replace(/\r\nUID:[^\r]*/, '').replace(/\r\nDTSTAMP:[^\r]*/, '');
+    await pg.ev("document.getElementById('planner-status').textContent = ''");
+    return { ...view, ics };
+  };
+  const show = (pg: Page, records: unknown[]): Promise<void> => pg.ev(`window.__et.records = ${J(records)}; window.__et.send({ type: 'alarms', ok: true, records: window.__et.records, armed: [], problems: [] })`);
+
+  // With no city: the planner and the file as in 2.0.1.
+  const n = await open('/app/');
+  await show(n, unseen);
+  await n.waitFor("document.querySelectorAll('#app-alarms-list li').length === 2");
+  await changeOn(n, unseen[0]!.id, 2);
+  const plain = await plannerView(n);
+  assert.equal(plain.when, 'Greatest eclipse: Saturday 6 February 2027 at 17:00 (UTC+1), which is 16:00 UTC.');
+  assert.equal(plain.zone, `Times of day are for this device's time zone, Europe/Oslo. ${A4}`);
+  await n.close();
+
+  // With Sydney chosen: the very same planner, file and records.
+  const c = await open('/app/', { kept: SYDNEY_TEXT });
+  await c.waitFor("document.getElementById('countdown-to').textContent === 'Starts in'", 4000);
+  await show(c, [...unseen, seenV1]);
+  await c.waitFor("document.querySelectorAll('#app-alarms-list li').length === 3");
+  await changeOn(c, unseen[0]!.id, 2);
+  const sydney = await plannerView(c);
+  assert.deepEqual(sydney, plain, 'the header, the zone line, the result lines, the choices and the calendar file are those with no city');
+  assert.ok(sydney.labels.includes('Before greatest eclipse') && !sydney.labels.includes('Before the eclipse starts'));
+  assert.doesNotMatch(sydney.ics, /LOCATION:|Sydney/, 'the calendar file names no city');
+  assert.match(sydney.ics, /\r\nDTSTART:20270206T160000Z\r\n/, 'DTSTART is greatest eclipse');
+  houseStyle(`${sydney.when} ${sydney.zone} ${sydney.results.join(' ')}`, 'planner for an eclipse the city cannot see');
+  await c.click('#app-set');
+  await waitStatus(c, T.SET_MANY.replace('{n}', '2'));
+  const set = (await posted(c, 'alarms.set')).at(-1);
+  assert.equal(set.eclipseId, '2027-02-06-solar');
+  assert.deepEqual(set.records, unseen, 'the records stay version 1, with the same ids and specs');
+  await c.key('Escape');
+  await c.waitFor("document.querySelectorAll('#app-alarms-list li').length === 3");
+  const text = await c.ev("document.getElementById('app-alarms-list').innerText");
+  assert.match(text, /On the day of the eclipse at 12:00(?! in)/);
+  assert.match(text, /30 minutes before greatest eclipse/);
+  // The eclipse Sydney sees: Change makes version 2 under the same id, and the header names the city.
+  await changeOn(c, seenV1.id, 1);
+  assert.equal(await cityText(c, 'planner-when'), 'Starts in Sydney: Monday 19 July 2027 at 01:57 (UTC+10), which is 15:57 UTC.');
+  await c.click('#app-set');
+  await waitStatus(c, T.SET_ONE);
+  const seen = (await posted(c, 'alarms.set')).at(-1);
+  assert.equal(seen.eclipseId, '2027-07-18-lunar');
+  assert.deepEqual(seen.records, [{ v: 2, id: seenV1.id, eclipseId: seenV1.eclipseId, spec: seenV1.spec, start: '2027-07-18T15:57:00Z', zone: 'Australia/Sydney', place: 'Sydney, Australia' }]);
+  assert.deepEqual(c.log.errors, []);
+  assert.deepEqual(c.log.csp, []);
+  await c.close();
+});
+
+await check('a stored version 2 record is shown with its city; one the page does not understand is not drawn', async () => {
+  const c = await open('/app/');
+  await c.ev(`window.__et.records = ${J(sydneyRecords)}; window.__et.send({ type: 'alarms', ok: true, records: window.__et.records, armed: [], problems: [] })`);
+  await c.waitFor("document.querySelectorAll('#app-alarms-list li').length === 2");
+  const text = await c.ev("document.getElementById('app-alarms-list').innerText");
+  assert.match(text, /in Sydney, Australia/);
+  // The app's armed instant is what the overview shows, as for a version 1 record.
+  await c.ev(`window.__et.send({ type: 'alarms', ok: true, records: window.__et.records, armed: [{ id: ${J(sydneyRecords[0]?.id)}, fireAt: '2027-07-18T02:00:00Z' }], problems: [] })`);
+  await c.waitFor("document.getElementById('app-alarms-list').innerText.includes('at 04:00 (UTC+2)')");
+  // A record the page does not understand empties the overview rather than drawing it (the page's own check).
+  await c.ev(`window.__et.send({ type: 'alarms', ok: true, records: [{ ...window.__et.records[0], zone: '+10:00' }], armed: [], problems: [] })`);
+  await sleep(300);
+  assert.equal(await c.ev("document.querySelectorAll('#app-alarms-list li').length"), 0);
+  assert.deepEqual(c.log.errors, []);
+  await c.close();
+});
+
+await check('the city in the app at the text sizes the app offers: the city card fits, Clear city is 48 px, no sideways scroll', async () => {
+  for (const width of [320, 412]) {
+    for (const scale of [1.3, 2.0]) {
+      const m = await open('/app/', { width, height: 800, kept: BERGEN_TEXT });
+      await m.s('Page.setFontSizes', { fontSizes: appFontSizes(scale) });
+      await m.waitFor("document.getElementById('countdown-to').textContent === 'Starts in'", 4000);
+      await sleep(250);
+      assert.deepEqual(await m.ev(overflowing(width)), [], `${width} px at ${scale}: nothing reaches past the screen`);
+      assert.equal(await m.ev('document.documentElement.scrollWidth'), await m.ev('document.documentElement.clientWidth'), 'no sideways scroll');
+      const clear = await m.ev("(() => { const r = document.getElementById('city-clear-btn').getBoundingClientRect(); return { h: r.height, w: r.width }; })()");
+      assert.ok(clear.h >= 47.5 && clear.w >= 47.5, `Clear city is at least 48 px: ${J(clear)}`);
+      assert.equal(await m.ev("document.getElementById('city-privacy').textContent"), 'Your city stays on this phone only. Clear it with the Clear city button.');
+      assert.deepEqual(m.log.errors, []);
+      assert.deepEqual(m.log.csp, []);
+      if (SHOTS && scale === 1.3) await m.viewShot(join(SHOTS, `app-city-${width}-${scale}.png`));
+      await m.close();
+    }
+  }
+});
+
+await check('the Google Play edition with a city: the filter and the city calendar file, no alarm message, the city is kept', async () => {
+  const g = await open('/play/', { kept: BERGEN_TEXT });
+  await g.waitFor("document.getElementById('countdown-to').textContent === 'Starts in'", 4000);
+  assert.equal(await cityText(g, 'city-selected-text'), 'Bergen, Norway');
+  await g.click('#city-clear-btn');
+  await sleep(200);
+  await pickFirst(g, 'sydney');
+  assert.equal((await posted(g, 'city.set')).at(-1)?.city, SYDNEY_TEXT);
+  await openEclipse(g, '2027-07-18-lunar');
+  assert.equal(await g.ev("document.querySelector('.alarm-choice').value"), 'day-1', 'the default with a city is 1 day before at 12:00');
+  assert.equal(await g.ev("!!document.getElementById('app-set')"), false, 'no Set ringing alarms');
+  await g.click('#app-calendar');
+  await waitStatus(g, T.CAL_OPENED);
+  const add = (await posted(g, 'calendar.add')).at(-1);
+  assert.equal(add.fileName, 'eclipse-2027-07-18-lunar.ics');
+  const ics = String(add.ics).replace(/\r\n /g, '');
+  assert.match(ics, /\r\nLOCATION:Sydney\\, Australia\r\n/);
+  assert.match(ics, /\r\nDTSTART:20270718T155700Z\r\n/, 'DTSTART is the start at the city');
+  assert.match(ics, /\r\nTRIGGER:-PT13H57M\r\n/, 'noon the day before on the Sydney clock is 13 h 57 min before the start');
+  const types = [...new Set((await g.ev('window.__et.posted.map((m) => m.type)')) as string[])].sort();
+  assert.deepEqual(types, ['calendar.add', 'city.get', 'city.set', 'hello'], 'no alarm message of any kind');
+  assert.equal(await g.ev('localStorage.length + sessionStorage.length'), 0);
+  assert.deepEqual(g.log.errors, []);
+  assert.deepEqual(g.log.csp, []);
+  await g.close();
+});
+
 await check('the Google Play edition: Add to calendar after Save, nothing about ringing alarms, no alarm message', async () => {
   const g = await open('/play/');
   await g.waitFor("document.documentElement.dataset.ready === 'true'");
@@ -736,9 +1063,11 @@ await check('the Google Play edition: Add to calendar after Save, nothing about 
   await sleep(1500);
   assert.equal(await g.ev("!!document.getElementById('app-alarms') || !!document.getElementById('app-problems')"), false);
   const types = [...new Set((await g.ev('window.__et.posted.map((m) => m.type)')) as string[])].sort();
-  assert.deepEqual(types, ['back.result', 'calendar.add', 'calendar.save', 'hello'], 'no alarms.list, alarms.set or problem.fix');
+  assert.deepEqual(types, ['back.result', 'calendar.add', 'calendar.save', 'city.get', 'hello'], 'no alarms.list, alarms.set or problem.fix; the kept city is asked for');
   const text = await g.ev('document.body.innerText');
   for (const w of [T.SET, T.HEADING, T.KEEPS, 'ringing alarm']) assert.ok(!text.toLowerCase().includes(w.toLowerCase()), `the Play page does not say ${w}`);
+  // The sentence names what the Play app keeps: the city and the last calendar file, and no alarm.
+  assert.equal(T.PLAY_KEEPS, 'EclipseTracker sends nothing. It keeps only the city you choose, if any, and the last file you added to your calendar, which it deletes when the app next starts afresh.');
   houseStyle(text, 'Play edition page');
   if (SHOTS) await g.shot(join(SHOTS, 'play-page-1280.png'));
   assert.deepEqual(g.log.errors, []);
@@ -746,7 +1075,8 @@ await check('the Google Play edition: Add to calendar after Save, nothing about 
   assert.deepEqual(await g.ev('window.__csp'), []);
   assert.deepEqual(g.log.offsite, []);
   assert.equal(await g.ev('localStorage.length + sessionStorage.length'), 0);
-  assert.equal(await g.ev("document.getElementById('city-card').hidden"), true, 'the Play edition hides the city chooser too');
+  assert.equal(await g.ev("document.getElementById('city-card').hidden"), false, 'the Play edition shows the city chooser (2.1.0)');
+  assert.equal(await g.ev("document.getElementById('city-privacy').textContent"), 'Your city stays on this phone only. Clear it with the Clear city button.');
   assert.equal(g.log.requests.some((r) => r.url.includes('cities.js')), false);
   await g.close();
 });

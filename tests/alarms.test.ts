@@ -8,13 +8,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import {
-  DEFAULT_SPEC, DEFAULT_TIME, MAX_ALARMS, defaultSpecAt, RECORD_GRACE_MS, choiceOf, fireInstantAt, isRecordId, isValidRecord, isValidRecordSet, isValidSpec, nextNewSpec, planAlarm, planAlarmAt, planAlarms, planAlarmsAt,
-  recordFate, recordsFromRows, ringing, rowsFromRecords, specForChoice,
+  DEFAULT_SPEC, DEFAULT_TIME, MAX_ALARMS, MAX_START_OFFSET_MS, defaultSpecAt, RECORD_GRACE_MS, choiceOf, fireInstantAt, isRecordId, isValidRecord, isValidRecordSet, isValidSpec, nextNewSpec, planAlarm, planAlarmAt, planAlarms, planAlarmsAt,
+  planRecord, plannerFrame, recordAnchor, recordFate, recordsFromRows, recordZone, ringing, rowsFromRecords, specForChoice,
 } from '#core/alarms.js';
+import { localAll } from '#core/local.js';
 import { ECLIPSES } from '#core/data.js';
-import { greatestMinute } from '#core/format.js';
-import type { AlarmSpec, DaysBefore, MinutesBefore, PlannerRow, RecordFate } from '#core/types.js';
+import { alarmWords, greatestMinute } from '#core/format.js';
+import type { AlarmRecord, AlarmSpec, DaysBefore, MinutesBefore, PlannerRow, RecordFate } from '#core/types.js';
 import { defined } from './helpers.ts';
 
 /** tests/alarm-vectors.json: hand-worked plans, each alarm as the planner gives it. */
@@ -275,4 +277,222 @@ test('with a city: an alarm after the anchor is flagged, a duplicate is found, a
   assert.equal(planned[2]?.status, 'duplicate');
   assert.equal(planAlarmAt(anchor, { kind: 'before', minutes: 15 }, 'UTC', Date.parse('2027-08-02T08:30:00Z')).status, 'past');
   assert.throws(() => planAlarmAt(anchor, DEFAULT_SPEC, 'Mars/Olympus', 0), RangeError);
+});
+
+// ==== Version 2 records: an alarm set with a city chosen (EclipseTracker 2.1.0) ================
+
+/** tests/city-record-vectors.json, written by tools/vectors/build-vectors.py with zoneinfo as the oracle; the Kotlin (core/CityAnchorTest) replays it too. */
+interface CityVectors {
+  readonly maxStartOffsetHours: number;
+  readonly widestStartOffsetMinutes: number;
+  readonly cases: ReadonlyArray<{
+    readonly city: string; readonly phone: string; readonly eclipse: { readonly id: string; readonly greatest: string }; readonly start: string; readonly zone: string;
+    readonly spec: AlarmSpec; readonly record: unknown; readonly words: string;
+    readonly plan: { readonly fireAt: string; readonly localDate: string; readonly localTime: string; readonly offsetMinutes: number; readonly afterAnchor: boolean; readonly dst: string };
+    readonly fates: Record<'before' | 'at' | 'after', { readonly now: string; readonly want: RecordVectors['cases'][number]['want'] }>;
+  }>;
+  readonly hand: RecordVectors['cases'];
+  readonly defaults: ReadonlyArray<{ readonly city: string; readonly zone: string; readonly start: string; readonly want: AlarmSpec; readonly ringsAt: string; readonly ringsAtStart: boolean }>;
+}
+const cityVectors = JSON.parse(readFileSync(new URL('./city-record-vectors.json', import.meta.url), 'utf8')) as CityVectors;
+const NOW0 = Date.parse('2026-11-12T00:00:00Z');
+const ID1 = '0123456789abcdef0123456789abcdef';
+const SYDNEY_V2 = { v: 2, id: ID1, eclipseId: '2027-07-18-lunar', spec: { kind: 'day', daysBefore: 1, time: '12:00' }, start: '2027-07-18T15:57:00Z', zone: 'Australia/Sydney', place: 'Sydney, Australia' } as const;
+
+test('city vectors: every version 2 case rings at the instant zoneinfo gives, whatever zone the phone is in', () => {
+  assert.equal(cityVectors.cases.length, 1600);
+  assert.equal(cityVectors.maxStartOffsetHours * 3_600_000, MAX_START_OFFSET_MS);
+  for (const c of cityVectors.cases) {
+    const where = `${c.city} ${c.eclipse.id} ${JSON.stringify(c.spec)}`;
+    assert.ok(isValidRecord(c.record), where);
+    const rec = c.record as AlarmRecord;
+    const p = planRecord(rec, c.eclipse, c.phone, NOW0);
+    assert.deepEqual({ fireAt: iso(p.fireAt), localDate: p.localDate, localTime: p.localTime, offsetMinutes: p.offsetMinutes, afterAnchor: p.afterGreatest, dst: p.dst }, c.plan, where);
+    // The phone's zone has no effect on a version 2 record.
+    assert.equal(planRecord(rec, c.eclipse, 'Pacific/Kiritimati', NOW0).fireAt, p.fireAt, where);
+    assert.equal(recordAnchor(rec, c.eclipse), Date.parse(c.start), where);
+    assert.equal(recordZone(rec, c.phone), c.zone, where);
+    assert.equal(alarmWords(c.spec, c.city), c.words, where);
+    for (const moment of ['before', 'at', 'after'] as const) {
+      const f = defined(c.fates[moment], moment);
+      const got = recordFate(rec, c.eclipse, c.phone, Date.parse(f.now));
+      assert.deepEqual(got.action === 'arm' ? { action: 'arm', fireAt: iso(got.fireAt) } : got, f.want, `${where} ${moment}`);
+    }
+  }
+  // The cases hold the ordinary and the edge: all nine options, 16 cities, and a wall time on the day the clocks change somewhere.
+  assert.equal(new Set(cityVectors.cases.map((c) => c.city)).size, 16);
+  assert.ok(cityVectors.widestStartOffsetMinutes < 3.2 * 60 && cityVectors.widestStartOffsetMinutes * 60_000 < MAX_START_OFFSET_MS);
+});
+
+test('city vectors: hand-picked clock-change days and records that must be refused', () => {
+  const wants = cityVectors.hand.map((c) => (c.want.action === 'arm' ? 'arm' : c.want.reason));
+  for (const k of ['arm', 'invalid', 'expired']) assert.ok(wants.includes(k), k);
+  for (const c of cityVectors.hand) {
+    const got = recordFate(c.record, c.eclipse ?? undefined, c.zone, Date.parse(c.now));
+    assert.deepEqual(got.action === 'arm' ? { action: 'arm', fireAt: iso(got.fireAt) } : got, c.want, c.name);
+  }
+});
+
+test('city vectors: the default alarm with a city rings at 12:00 in the city, never after the start', () => {
+  assert.equal(cityVectors.defaults.length, 160);
+  for (const d of cityVectors.defaults) {
+    const where = `${d.city} ${d.start}`;
+    assert.deepEqual(defaultSpecAt(Date.parse(d.start), d.zone), d.want, where);
+    const p = planAlarmAt(Date.parse(d.start), d.want, d.zone, NOW0);
+    assert.equal(iso(p.fireAt), d.ringsAt, where);
+    assert.equal(p.localTime, '12:00', where);
+    assert.ok(p.fireAt <= Date.parse(d.start), where);
+    assert.equal(p.fireAt === Date.parse(d.start), d.ringsAtStart, where);
+  }
+});
+
+test('a version 2 record is valid with exactly seven keys, and refused in every way the app refuses it', () => {
+  assert.ok(isValidRecord(SYDNEY_V2));
+  const without = (k: string): object => Object.fromEntries(Object.entries(SYDNEY_V2).filter(([key]) => key !== k));
+  const bad: Array<[string, unknown]> = [
+    ['no start', without('start')], ['no zone', without('zone')], ['no place', without('place')],
+    ['eight keys', { ...SYDNEY_V2, extra: 1 }],
+    ['version 3', { ...SYDNEY_V2, v: 3 }], ['version "2"', { ...SYDNEY_V2, v: '2' }],
+    ['version 1 with the version 2 keys', { ...SYDNEY_V2, v: 1 }],
+    ['version 2 with four keys', { v: 2, id: ID1, eclipseId: '2027-07-18-lunar', spec: SYDNEY_V2.spec }],
+    ['start with seconds', { ...SYDNEY_V2, start: '2027-07-18T15:57:30Z' }],
+    ['start with milliseconds', { ...SYDNEY_V2, start: '2027-07-18T15:57:00.000Z' }],
+    ['start as epoch milliseconds', { ...SYDNEY_V2, start: 1_800_000_000_000 }],
+    ['start 24:00', { ...SYDNEY_V2, start: '2027-07-18T24:00:00Z' }],
+    ['start on 30 February', { ...SYDNEY_V2, start: '2027-02-30T15:57:00Z' }],
+    ['start with an offset', { ...SYDNEY_V2, start: '2027-07-18T15:57:00+00:00' }],
+    ['a fixed offset as the zone', { ...SYDNEY_V2, zone: '+10:00' }],
+    ['an unknown zone', { ...SYDNEY_V2, zone: 'Mars/Olympus' }],
+    ['a lower-case zone', { ...SYDNEY_V2, zone: 'australia/sydney' }],
+    ['a zone that is not text', { ...SYDNEY_V2, zone: 10 }],
+    ['an empty place', { ...SYDNEY_V2, place: '' }],
+    ['a place of 201 characters', { ...SYDNEY_V2, place: 'x'.repeat(201) }],
+    ['a place with U+0000', { ...SYDNEY_V2, place: 'Syd\u0000ney' }],
+    ['a place with U+001F', { ...SYDNEY_V2, place: 'Syd\u001fney' }],
+    ['a place with U+007F', { ...SYDNEY_V2, place: 'Syd\u007fney' }],
+    ['a place with U+009F', { ...SYDNEY_V2, place: 'Syd\u009fney' }],
+    ['a place that is not text', { ...SYDNEY_V2, place: 5 }],
+    ['a bad spec', { ...SYDNEY_V2, spec: { kind: 'before', minutes: 45 } }],
+    ['a bad id', { ...SYDNEY_V2, id: 'x' }],
+    ['a bad eclipse id', { ...SYDNEY_V2, eclipseId: '2027-07-18' }],
+  ];
+  for (const [what, r] of bad) assert.ok(!isValidRecord(r), what);
+  // The edges that are allowed.
+  assert.ok(isValidRecord({ ...SYDNEY_V2, place: 'x'.repeat(200) }));
+  assert.ok(isValidRecord({ ...SYDNEY_V2, place: `${'x'.repeat(198)}\u{1F30D}` }), 'an emoji counts two of the 200');
+  assert.ok(!isValidRecord({ ...SYDNEY_V2, place: `${'x'.repeat(199)}\u{1F30D}` }), 'an emoji over the limit');
+  assert.ok(isValidRecord({ ...SYDNEY_V2, zone: 'UTC' }));
+  assert.ok(isValidRecord({ ...SYDNEY_V2, zone: 'Etc/GMT-10' }));
+  assert.ok(isValidRecord({ ...SYDNEY_V2, zone: 'America/Argentina/Ushuaia' }));
+  assert.ok(isValidRecord({ ...SYDNEY_V2, zone: 'America/Port-au-Prince' }));
+  // Version 1 and version 2 records may stand side by side in one store, and the cap counts both.
+  const v1 = { v: 1, id: 'b'.repeat(32), eclipseId: '2027-07-18-lunar', spec: DEFAULT_SPEC };
+  assert.ok(isValidRecordSet([SYDNEY_V2, v1]));
+  assert.ok(!isValidRecordSet([SYDNEY_V2, { ...v1, id: SYDNEY_V2.id }]), 'an id twice, across versions');
+});
+
+test('every zone in the city catalogue is a zone a version 2 record accepts', () => {
+  const context = vm.createContext({});
+  vm.runInContext(readFileSync(new URL('../cities.js', import.meta.url), 'utf8'), context, { filename: 'cities.js' });
+  const zones = new Set((vm.runInContext('CITIES', context) as Array<{ tz: string }>).map((c) => c.tz));
+  assert.equal(zones.size, 349);
+  for (const z of zones) assert.ok(isValidRecord({ ...SYDNEY_V2, zone: z }), z);
+});
+
+test('recordFate for a version 2 record: armed at the city time, the phone zone has no effect, a far start is invalid, 48 hours expires it', () => {
+  const eclipse = { id: '2027-07-18-lunar', greatest: '2027-07-18T18:03:00Z' };
+  const arm = recordFate(SYDNEY_V2, eclipse, 'Europe/Oslo', Date.parse('2027-07-01T00:00:00Z'));
+  assert.deepEqual(arm, { action: 'arm', fireAt: Date.parse('2027-07-18T02:00:00Z') }); // 12:00 on 18 July, UTC+10
+  for (const phone of ['Asia/Tokyo', 'America/New_York', 'UTC']) assert.deepEqual(recordFate(SYDNEY_V2, eclipse, phone, Date.parse('2027-07-01T00:00:00Z')), arm, phone);
+  assert.deepEqual(recordFate(SYDNEY_V2, eclipse, 'UTC', Date.parse('2027-07-18T02:00:00Z')), { action: 'delete', reason: 'passed' });
+  const far = (mins: number): string => new Date(greatestMinute(eclipse) + mins * 60_000).toISOString().replace('.000Z', 'Z');
+  assert.equal(recordFate({ ...SYDNEY_V2, start: far(360) }, eclipse, 'UTC', 0).action, 'arm', '6 hours after is allowed');
+  assert.equal(recordFate({ ...SYDNEY_V2, start: far(-360) }, eclipse, 'UTC', 0).action, 'arm', '6 hours before is allowed');
+  assert.deepEqual(recordFate({ ...SYDNEY_V2, start: far(361) }, eclipse, 'UTC', 0), { action: 'delete', reason: 'invalid' });
+  assert.deepEqual(recordFate({ ...SYDNEY_V2, start: far(-361) }, eclipse, 'UTC', 0), { action: 'delete', reason: 'invalid' });
+  assert.deepEqual(recordFate(SYDNEY_V2, eclipse, 'UTC', greatestMinute(eclipse) + RECORD_GRACE_MS), { action: 'delete', reason: 'expired' });
+  assert.deepEqual(recordFate({ ...SYDNEY_V2, start: far(361) }, eclipse, 'UTC', greatestMinute(eclipse) + RECORD_GRACE_MS), { action: 'delete', reason: 'expired' }, 'expiry is tested first');
+});
+
+test('planRecord equals planAlarmAt from the start in the city zone; a version 1 record plans from greatest eclipse in the phone zone as before', () => {
+  const eclipse = { id: '2027-07-18-lunar', greatest: '2027-07-18T18:03:00Z' };
+  const now = Date.parse('2027-07-01T00:00:00Z');
+  assert.deepEqual(planRecord(SYDNEY_V2, eclipse, 'Europe/Oslo', now), planAlarmAt(Date.parse(SYDNEY_V2.start), SYDNEY_V2.spec, 'Australia/Sydney', now));
+  const v1 = { v: 1, id: 'b'.repeat(32), eclipseId: eclipse.id, spec: SYDNEY_V2.spec } as const;
+  assert.deepEqual(planRecord(v1, eclipse, 'Europe/Oslo', now), planAlarm(eclipse, v1.spec, 'Europe/Oslo', now));
+  assert.notEqual(planRecord(v1, eclipse, 'Europe/Oslo', now).fireAt, planRecord(v1, eclipse, 'Asia/Tokyo', now).fireAt, 'version 1 still follows the phone');
+});
+
+test('recordsFromRows with a local anchor writes version 2 and keeps the ids; rowsFromRecords reads both versions', () => {
+  const local = { start: Date.parse('2027-07-18T15:57:00Z'), zone: 'Australia/Sydney', place: 'Sydney, Australia' };
+  const newId = () => 'd'.repeat(32);
+  const rows: PlannerRow[] = [{ id: ID1, spec: SYDNEY_V2.spec }, { spec: { kind: 'before', minutes: 30 } }];
+  const got = recordsFromRows('2027-07-18-lunar', rows, newId, local);
+  assert.deepEqual(got, [SYDNEY_V2, { ...SYDNEY_V2, id: 'd'.repeat(32), spec: { kind: 'before', minutes: 30 } }]);
+  assert.ok(isValidRecordSet(got));
+  assert.deepEqual(rowsFromRecords(got, '2027-07-18-lunar'), [{ id: ID1, spec: SYDNEY_V2.spec }, { id: 'd'.repeat(32), spec: { kind: 'before', minutes: 30 } }]);
+  // Without a local anchor the same rows give version 1 records, as 2.0.1 did.
+  const plain = recordsFromRows('2027-07-18-lunar', rows, newId);
+  assert.ok(plain.every((r) => r.v === 1 && Object.keys(r).length === 4));
+  // A local anchor that is not valid is refused whole.
+  assert.throws(() => recordsFromRows('2027-07-18-lunar', rows, newId, { ...local, zone: '+10:00' }), RangeError);
+  assert.throws(() => recordsFromRows('2027-07-18-lunar', rows, newId, { ...local, place: '' }), RangeError);
+  assert.throws(() => recordsFromRows('2027-07-18-lunar', rows, newId, { ...local, start: local.start + 30_000 }), RangeError, 'a start with seconds');
+});
+
+test('plan Q4 (Marcos, 2026-11-12): an eclipse the chosen city cannot see plans from greatest eclipse in the device zone and stays version 1; one it sees gets version 2', () => {
+  const sydney = localAll({ lat: -33.8678, lon: 151.2073 });
+  const unseen = defined(ECLIPSES.find((e) => e.id === '2027-02-06-solar'), '2027-02-06-solar');
+  const seen = defined(ECLIPSES.find((e) => e.id === '2027-07-18-lunar'), '2027-07-18-lunar');
+  assert.equal(sydney.has(unseen.id), false, 'Sydney cannot see the annular eclipse of 6 February 2027');
+  assert.equal(sydney.has(seen.id), true, 'Sydney sees the penumbral eclipse of 18 July 2027');
+  const now = Date.parse('2026-10-16T10:30:00Z');
+  const specs: AlarmSpec[] = [DEFAULT_SPEC, { kind: 'day', daysBefore: 1, time: '12:00' }, { kind: 'before', minutes: 30 }];
+  const rows: PlannerRow[] = specs.map((spec, i) => (i === 0 ? { id: ID1, spec } : { spec }));
+  let n = 0;
+  const newId = () => String(++n).repeat(32).slice(0, 32);
+  const place = 'Sydney, Australia';
+
+  // Not seen: the frame is the one with no city, so the plan is exactly the 2.0.1 plan in the device zone.
+  const f = plannerFrame(unseen, sydney.get(unseen.id)?.start, 'Australia/Sydney', 'Europe/Oslo');
+  assert.deepEqual(f, { anchor: greatestMinute(unseen), zone: 'Europe/Oslo', local: false });
+  assert.deepEqual(f, plannerFrame(unseen, undefined, 'UTC', 'Europe/Oslo'), 'the same as with no city');
+  assert.deepEqual(planAlarmsAt(f.anchor, specs, f.zone, now), planAlarms(unseen, specs, 'Europe/Oslo', now));
+  // The page gives no local anchor, so the records stay version 1 with the ids they had, and the words are the greatest-eclipse ones.
+  const v1 = recordsFromRows(unseen.id, rows, newId, f.local ? { start: f.anchor, zone: f.zone, place } : undefined);
+  assert.ok(v1.every((r) => r.v === 1 && Object.keys(r).sort().join() === 'eclipseId,id,spec,v'));
+  assert.equal(v1[0]?.id, ID1);
+  assert.deepEqual(v1.map((r) => alarmWords(r.spec, r.v === 2 ? r.place : undefined)), [
+    'On the day of the eclipse at 12:00', '1 day before at 12:00', '30 minutes before greatest eclipse',
+  ]);
+  // Each record then rings from greatest eclipse in the phone zone, as in 2.0.1.
+  for (const r of v1) assert.deepEqual(planRecord(r, unseen, 'Europe/Oslo', now), planAlarm(unseen, r.spec, 'Europe/Oslo', now));
+
+  // Seen: the start at the city, to the minute, in the city zone; the records are version 2.
+  const g = plannerFrame(seen, sydney.get(seen.id)?.start, 'Australia/Sydney', 'Europe/Oslo');
+  assert.deepEqual(g, { anchor: Date.parse('2027-07-18T15:57:00Z'), zone: 'Australia/Sydney', local: true });
+  n = 0;
+  const v2 = recordsFromRows(seen.id, rows, newId, g.local ? { start: g.anchor, zone: g.zone, place } : undefined);
+  assert.ok(v2.every((r) => r.v === 2 && r.start === '2027-07-18T15:57:00Z' && r.zone === 'Australia/Sydney' && r.place === place));
+  assert.equal(v2[0]?.id, ID1);
+  assert.equal(alarmWords({ kind: 'before', minutes: 30 }, place), '30 minutes before the eclipse starts in Sydney, Australia');
+});
+
+test('alarm words name the city for a version 2 record, for every option, with no dash and no exclamation mark', () => {
+  const specs: AlarmSpec[] = [
+    ...([0, 1, 2, 3, 7] as const).map((d): AlarmSpec => ({ kind: 'day', daysBefore: d, time: '08:30' })),
+    ...([15, 30, 60, 120] as const).map((m): AlarmSpec => ({ kind: 'before', minutes: m })),
+  ];
+  const place = 'Sydney, Australia';
+  assert.deepEqual(specs.map((s) => alarmWords(s, place)), [
+    'On the day of the eclipse at 08:30 in Sydney, Australia', '1 day before at 08:30 in Sydney, Australia', '2 days before at 08:30 in Sydney, Australia',
+    '3 days before at 08:30 in Sydney, Australia', '1 week before at 08:30 in Sydney, Australia',
+    '15 minutes before the eclipse starts in Sydney, Australia', '30 minutes before the eclipse starts in Sydney, Australia',
+    '1 hour before the eclipse starts in Sydney, Australia', '2 hours before the eclipse starts in Sydney, Australia',
+  ]);
+  assert.deepEqual(specs.map((s) => alarmWords(s)), [
+    'On the day of the eclipse at 08:30', '1 day before at 08:30', '2 days before at 08:30', '3 days before at 08:30', '1 week before at 08:30',
+    '15 minutes before greatest eclipse', '30 minutes before greatest eclipse', '1 hour before greatest eclipse', '2 hours before greatest eclipse',
+  ]);
+  for (const s of specs) assert.doesNotMatch(alarmWords(s, place), /[‐-―!]|--/);
 });

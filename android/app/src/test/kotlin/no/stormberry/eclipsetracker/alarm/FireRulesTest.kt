@@ -151,7 +151,13 @@ class FireRulesTest {
         assertNull(Snooze.parse(JSONObject(good.toString()).put("eclipseId", "2027-02-06-other")))
         assertNull(Snooze.parse(JSONObject(good.toString()).put("at", -1)))
         assertNull(Snooze.parse(JSONObject(good.toString()).put("at", "soon")))
-        assertNull(Snooze.parse(JSONObject(good.toString()).put("title", "x".repeat(201))))
+        assertNull(Snooze.parse(JSONObject(good.toString()).put("title", "x".repeat(401))))
+        // A version 2 text names the city and is up to 240 characters (EclipseTracker 2.1.0); one of 400 still parses.
+        assertEquals(s.copy(text = "x".repeat(245)), Snooze.parse(JSONObject(good.toString()).put("text", "x".repeat(245))))
+        assertEquals(400, Snooze.MAX_WORDS)
+        assertNull(Snooze.parse(JSONObject(good.toString()).put("text", "x".repeat(401))))
+        // A snooze written by 2.0.1 reads back unchanged.
+        assertEquals(s, Snooze.parse(JSONObject(good.toString())))
         assertNull(Snooze.parse("not a snooze"))
     }
 

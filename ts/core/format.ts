@@ -108,10 +108,19 @@ export function countdownWords(ms: number): string {
 const BEFORE_WORDS: Readonly<Record<number, string>> = { 15: '15 minutes', 30: '30 minutes', 60: '1 hour', 120: '2 hours' };
 const DAY_WORDS: Readonly<Record<number, string>> = { 0: 'On the day of the eclipse', 1: '1 day before', 2: '2 days before', 3: '3 days before', 7: '1 week before' };
 
-/** "On the day of the eclipse at 12:00", "1 week before at 08:30", "30 minutes before greatest eclipse". */
-export function alarmWords(spec: AlarmSpec): string {
-  if (spec.kind === 'before') return `${BEFORE_WORDS[spec.minutes]} before greatest eclipse`;
-  return `${DAY_WORDS[spec.daysBefore]} at ${spec.time}`;
+/**
+ * "On the day of the eclipse at 12:00", "1 week before at 08:30", "30 minutes before greatest eclipse".
+ * With a place (an alarm set for a city, EclipseTracker 2.1.0) the words name it:
+ * "1 day before at 12:00 in Sydney, Australia", "30 minutes before the eclipse starts in Sydney, Australia".
+ */
+export function alarmWords(spec: AlarmSpec, place?: string): string {
+  if (spec.kind === 'before') {
+    return place === undefined
+      ? `${BEFORE_WORDS[spec.minutes]} before greatest eclipse`
+      : `${BEFORE_WORDS[spec.minutes]} before the eclipse starts in ${place}`;
+  }
+  const words = `${DAY_WORDS[spec.daysBefore]} at ${spec.time}`;
+  return place === undefined ? words : `${words} in ${place}`;
 }
 
 /** The labels of the choices, in the order the planner offers them. */

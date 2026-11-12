@@ -201,7 +201,11 @@ data class AlarmState(
  * Storage (spec 9.1, MoonApp's audit fix): the records live in DEVICE-PROTECTED storage, the only
  * storage readable between a restart and the first unlock, which is exactly when
  * LOCKED_BOOT_COMPLETED must re-arm them. They hold an eclipse id and the alarm the person chose,
- * nothing else. Excluded from every backup (xml/backup_rules.xml, xml/data_extraction_rules.xml).
+ * nothing else, except that a version 2 record (an alarm set with a city chosen, 2.1.0) also holds
+ * the start at the city, the city's zone and its name, so records in one store may be version 1 or
+ * version 2 (AlarmRecord.parse reads both; nothing here depends on the version). The chosen city
+ * itself is not here: the engine never reads it (MainActivity keeps it in its own preferences).
+ * Excluded from every backup (xml/backup_rules.xml, xml/data_extraction_rules.xml).
  */
 object AlarmScheduling {
     private const val TAG = "EclipseAlarmScheduling"

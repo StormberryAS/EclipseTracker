@@ -1,5 +1,5 @@
-import { coveredWords, eclipseName, greatestMinute, localMagnitude, localName, localNotes, localWhen, magnitudeWords, minuteOf, moonHeightWords, utcWhen } from './format.js?v=635b29f8';
-import { MAX_ALARMS, ringing } from './alarms.js?v=473c494d';
+import { coveredWords, eclipseName, greatestMinute, localMagnitude, localName, localNotes, localWhen, magnitudeWords, minuteOf, moonHeightWords, utcWhen } from './format.js?v=118a26b0';
+import { MAX_ALARMS, ringing } from './alarms.js?v=4900816d';
 export const PRODID = '-//Stormberry AS//EclipseTracker 2.0//EN';
 export const EVENT_MINUTES = 30;
 export function escapeText(text) {

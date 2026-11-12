@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { defined, group } from './helpers.ts';
 
 const read = (p: string): string => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
@@ -242,4 +242,9 @@ test('the city is kept under one key, only on the website, and only inside try a
   assert.doesNotMatch(app, /sessionStorage|indexedDB|document\.cookie/);
   // The storage calls sit in keepCity and readKeptCity, and keepCity returns before them inside the app.
   assert.match(group(/(function keepCity[\s\S]*?\n\}\n)/, app), /if \(host\) \{[\s\S]*?return true;\s*\}\s*try \{/);
+});
+
+test('_config.yml has theme: null directly above exclude: (GitHub Pages no longer publishes its Primer stylesheet; EclipseTracker 2.1.0)', () => {
+  assert.match(read('_config.yml'), /^theme: null\nexclude:\n/m);
+  assert.ok(!existsSync(new URL('../.nojekyll', import.meta.url)), 'no .nojekyll file: it would turn the exclusions off');
 });

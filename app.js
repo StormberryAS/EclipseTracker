@@ -1,11 +1,11 @@
 /*! app.js and core/*.js are compiled from ts/ by tools/build-ts.sh, which leaves out every comment
     but this one: the explanations are in the source. Edit ts/, never the .js: the build refuses to
     overwrite a hand edit, and its check mode fails on one. */
-import { DEFAULT_SPEC, MAX_ALARMS, defaultSpecAt, RECORD_GRACE_MS, choiceOf, isValidRecordSet, nextNewSpec, planAlarm, planAlarmsAt, recordsFromRows, ringing, rowsFromRecords, specForChoice } from './core/alarms.js?v=473c494d';
+import { DEFAULT_SPEC, MAX_ALARMS, MAX_START_OFFSET_MS, defaultSpecAt, RECORD_GRACE_MS, choiceOf, isPlace, isValidRecordSet, nextNewSpec, planAlarm, planAlarmsAt, planRecord, plannerFrame, recordsFromRows, ringing, rowsFromRecords, specForChoice } from './core/alarms.js?v=4900816d';
 import { parseStoredCity, searchCities, storedCityText } from './core/citysearch.js?v=076aaaec';
-import { ECLIPSES, eclipseById, groupByYear, matches, nextEclipse, typesFor, upcoming } from './core/eclipses.js?v=7f5013ec';
-import { BEFORE_CHOICES, DAY_CHOICES, alarmWords, countdownParts, countdownWords, dateWords, eclipseName, greatestMinute, icsFileName, localEndWords, localListWords, localMaximumWords, localName, localNotes, localWhen, longDate, magnitudeWords, minuteOf, offsetWords, shortDate } from './core/format.js?v=635b29f8';
-import { buildIcs } from './core/ics.js?v=3611bb06';
+import { ECLIPSES, eclipseById, groupByYear, matches, nextEclipse, typesFor, upcoming } from './core/eclipses.js?v=11b1b209';
+import { BEFORE_CHOICES, DAY_CHOICES, alarmWords, countdownParts, countdownWords, dateWords, eclipseName, greatestMinute, icsFileName, localEndWords, localListWords, localMaximumWords, localName, localNotes, localWhen, longDate, magnitudeWords, minuteOf, offsetWords, shortDate } from './core/format.js?v=118a26b0';
+import { buildIcs } from './core/ics.js?v=dcc17fbc';
 import { localAll } from './core/local.js?v=6aac7e54';
 import { deviceZone, isKnownZone, isWallTime, localDateTime, offsetMinutes } from './core/zoned.js?v=d3e47120';
 let ZONE = deviceZone();
@@ -18,6 +18,12 @@ function zoneNow() {
 function anchorOf(e) {
     const l = city ? locals.get(e.id) : undefined;
     return l ? minuteOf(l.start) : greatestMinute(e);
+}
+function frameOf(e) {
+    return plannerFrame(e, city ? locals.get(e.id)?.start : undefined, cityZone, ZONE);
+}
+function plannerCity() {
+    return planning && frameOf(planning).local ? city : undefined;
 }
 function visibleEclipses() {
     return city ? ECLIPSES.filter((e) => locals.has(e.id)) : ECLIPSES;
@@ -257,8 +263,8 @@ function say(text) {
 }
 function plannerHeader(e) {
     setText($('planner-title'), `Alarms for the ${eclipseName(e).toLowerCase()}`);
-    const t = anchorOf(e);
-    if (city) {
+    const { anchor: t, local } = frameOf(e);
+    if (city && local) {
         setText($('planner-when'), `Starts in ${city.name}: ${localWhen(cityZone, t)}, which is ${localDateTime('UTC', t).time} UTC.`);
         setText($('planner-zone'), `Times of day are for the time zone of ${city.name}, ${cityZone}. The alarms ring at those moments wherever you are, so your calendar can show another hour. Alarms before the start always follow the eclipse.`);
         return;
@@ -270,7 +276,8 @@ function plannerHeader(e) {
 function openPlanner(e, from, start = []) {
     planning = e;
     opener = from;
-    const initial = start.length > 0 ? start.slice(0, MAX_ALARMS) : [{ spec: city ? defaultSpecAt(anchorOf(e), cityZone) : DEFAULT_SPEC }];
+    const frame = frameOf(e);
+    const initial = start.length > 0 ? start.slice(0, MAX_ALARMS) : [{ spec: frame.local ? defaultSpecAt(frame.anchor, frame.zone) : DEFAULT_SPEC }];
     rows = initial.map((r) => ({ ...(r.id ? { id: r.id } : {}), spec: r.spec, timeText: r.spec.kind === 'day' ? r.spec.time : lastTime }));
     plannerHeader(e);
     $('planner-status').textContent = '';
@@ -294,7 +301,7 @@ function resultWords(p, planned) {
         return `This rings at the same moment as alarm ${first + 1}, so it is left out of the file.`;
     }
     let words = `Rings ${longDate(p.localDate)} at ${p.localTime} (${offsetWords(p.offsetMinutes)})`;
-    const after = city
+    const after = plannerCity()
         ? ', after the eclipse starts. Some calendars leave out an alarm set for after the eclipse begins.'
         : ', after greatest eclipse. Some calendars leave out an alarm set for after the eclipse begins.';
     words += p.afterGreatest ? after : '.';
@@ -310,7 +317,8 @@ function planRows(now) {
         return [];
     const specs = rowSpecs();
     const complete = specs.filter((s) => s !== null);
-    const planned = planAlarmsAt(anchorOf(planning), complete, zoneNow(), now);
+    const frame = frameOf(planning);
+    const planned = planAlarmsAt(frame.anchor, complete, frame.zone, now);
     let k = 0;
     return specs.map((s) => (s === null ? null : planned[k++] ?? null));
 }
@@ -345,8 +353,9 @@ function renderRows(focusIndex = -1) {
         const choiceLabel = el('label', { class: 'field' });
         choiceLabel.append(el('span', { class: 'field-label' }, 'When'));
         const choice = el('select', { class: 'alarm-choice', 'aria-describedby': resultId });
+        const seen = plannerCity() !== undefined;
         for (const c of DAY_CHOICES)
-            choice.append(el('option', { value: c.value }, city && c.value === 'before' ? 'Before the eclipse starts' : c.label));
+            choice.append(el('option', { value: c.value }, seen && c.value === 'before' ? 'Before the eclipse starts' : c.label));
         choice.value = choiceOf(row.spec);
         choiceLabel.append(choice);
         fs.append(choiceLabel);
@@ -445,9 +454,10 @@ function randomHex(bytes) {
 function checkedPlan(now, kept = false) {
     if (!planning)
         return undefined;
-    const g = anchorOf(planning);
+    const g = frameOf(planning).anchor;
+    const seenFrom = plannerCity();
     if (g <= now && !(kept && now < g + RECORD_GRACE_MS)) {
-        say(city ? `This eclipse has already started in ${city.name}, so there is nothing to save.` : 'This eclipse has passed, so there is nothing to save.');
+        say(seenFrom ? `This eclipse has already started in ${seenFrom.name}, so there is nothing to save.` : 'This eclipse has passed, so there is nothing to save.');
         return undefined;
     }
     const planned = planRows(now);
@@ -818,7 +828,7 @@ function openFor(e, from) {
 }
 function appPage() {
     return {
-        core: { eclipseById, eclipseName, alarmWords, localWhen, planAlarm, recordsFromRows, rowsFromRecords, isValidRecordSet, greatestMinute, upcoming },
+        core: { eclipseById, eclipseName, alarmWords, localWhen, planAlarm, planRecord, recordsFromRows, rowsFromRecords, isValidRecordSet, greatestMinute, upcoming },
         zone: () => ZONE,
         openFor: (id, opener) => {
             const e = eclipseById(id);
@@ -830,6 +840,13 @@ function appPage() {
             const plan = checkedPlan(Date.now(), true);
             if (!plan)
                 return undefined;
+            const frame = frameOf(plan.eclipse);
+            const seenFrom = frame.local ? city : undefined;
+            const place = seenFrom ? `${seenFrom.name}, ${seenFrom.country}` : undefined;
+            if (place !== undefined && (!isPlace(place) || Math.abs(frame.anchor - greatestMinute(plan.eclipse)) > MAX_START_OFFSET_MS)) {
+                say('The ringing alarms could not be set. Try again.');
+                return undefined;
+            }
             return {
                 eclipse: plan.eclipse,
                 count: rows.length,
@@ -837,6 +854,7 @@ function appPage() {
                     const id = rows[index]?.id;
                     return p.status === 'ok' ? [{ index, ...(id ? { id } : {}), spec: p.spec }] : [];
                 }),
+                ...(place !== undefined ? { local: { start: frame.anchor, zone: frame.zone, place } } : {}),
             };
         },
         setRowIds: (ids) => {

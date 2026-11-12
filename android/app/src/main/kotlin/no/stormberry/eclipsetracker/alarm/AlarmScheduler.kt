@@ -118,7 +118,7 @@ object AlarmScheduler {
                     val code = requestCodeFor(record.id)
                     val armedFor = armedAt[code]
                     val due = if (fate.reason == "passed" && code in previouslyArmed && armedFor != null) {
-                        catalogue[record.eclipseId]?.let { Planner.fireInstant(it.greatest, record.spec, zone).first }
+                        catalogue[record.eclipseId]?.let { Planner.fireInstantFor(record, it, zone) }
                             ?.takeIf { it > now - FireRules.LATE_LIMIT_MS && it == armedFor }
                     } else {
                         null
@@ -193,6 +193,10 @@ object AlarmScheduler {
         val others = stored.filter { it.eclipseId != eclipseId }
         val otherIds = others.mapTo(HashSet()) { it.id }
         if (records.any { it.id in otherIds }) return null
+        // A version 2 start far from greatest eclipse cannot come from the page: the whole message is refused, so
+        // the page says "could not be set" and nothing is deleted later in silence (EclipseTracker 2.1.0).
+        val greatest = Planner.greatestMinute(catalogue[eclipseId]!!.greatest)
+        if (records.any { r -> r.local != null && Math.abs(r.local.start - greatest) > Planner.MAX_START_OFFSET_MS }) return null
         return others + records
     }
 

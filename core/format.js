@@ -70,10 +70,14 @@ export function countdownWords(ms) {
 }
 const BEFORE_WORDS = { 15: '15 minutes', 30: '30 minutes', 60: '1 hour', 120: '2 hours' };
 const DAY_WORDS = { 0: 'On the day of the eclipse', 1: '1 day before', 2: '2 days before', 3: '3 days before', 7: '1 week before' };
-export function alarmWords(spec) {
-    if (spec.kind === 'before')
-        return `${BEFORE_WORDS[spec.minutes]} before greatest eclipse`;
-    return `${DAY_WORDS[spec.daysBefore]} at ${spec.time}`;
+export function alarmWords(spec, place) {
+    if (spec.kind === 'before') {
+        return place === undefined
+            ? `${BEFORE_WORDS[spec.minutes]} before greatest eclipse`
+            : `${BEFORE_WORDS[spec.minutes]} before the eclipse starts in ${place}`;
+    }
+    const words = `${DAY_WORDS[spec.daysBefore]} at ${spec.time}`;
+    return place === undefined ? words : `${words} in ${place}`;
 }
 export const DAY_CHOICES = [
     { value: 'day-0', label: 'On the day of the eclipse' },

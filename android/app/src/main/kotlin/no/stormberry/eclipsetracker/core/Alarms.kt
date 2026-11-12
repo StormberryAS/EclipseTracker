@@ -25,6 +25,12 @@ import java.time.format.DateTimeFormatter
  *  - "before greatest eclipse" alarms are plain subtraction from the rounded instant;
  *  - an alarm whose time is not after now has passed; a later alarm at the same minute as an
  *    earlier one is a duplicate.
+ *
+ * Version 2 records (EclipseTracker 2.1.0, an alarm set while a city is chosen) count from the
+ * minute the eclipse starts at the city, in the city's zone, wherever the phone is: the page works
+ * that start out (ts/core/local.ts) and the record carries it, whole minute, at most
+ * [Planner.MAX_START_OFFSET_MS] from greatest eclipse. A version 1 record is exactly what 2.0.1
+ * stored and counts from greatest eclipse in the phone's zone, as before.
  */
 
 /** One alarm as the person chose it: the question, never the answer (SunApp's AlarmRule rule). */
@@ -74,27 +80,81 @@ sealed interface AlarmSpec {
     }
 }
 
-/** The record stage B stores for each alarm (spec 9.4): exactly v, id, eclipseId and spec. */
-data class AlarmRecord(val id: String, val eclipseId: String, val spec: AlarmSpec) {
-    fun toJson(): JSONObject = JSONObject().put("v", 1).put("id", id).put("eclipseId", eclipseId).put("spec", spec.toJson())
+/**
+ * Where a version 2 record counts from (EclipseTracker 2.1.0): the minute the eclipse starts at the
+ * city ([start], epoch ms, a whole minute), the city's time zone ([zone], an IANA region, never a
+ * fixed offset) and its name ([place], "Sydney, Australia", for the alarm's words).
+ */
+data class LocalAnchor(val start: Long, val zone: ZoneId, val place: String)
+
+/**
+ * The record stage B stores for each alarm (spec 9.4). Version 1 has exactly v, id, eclipseId and
+ * spec ([local] null). Version 2 (2.1.0) has those and start, zone and place ([local] set).
+ */
+data class AlarmRecord(val id: String, val eclipseId: String, val spec: AlarmSpec, val local: LocalAnchor? = null) {
+    fun toJson(): JSONObject {
+        val o = JSONObject().put("v", if (local == null) 1 else 2).put("id", id).put("eclipseId", eclipseId).put("spec", spec.toJson())
+        if (local != null) o.put("start", Json.instant(local.start)).put("zone", local.zone.id).put("place", local.place)
+        return o
+    }
 
     companion object {
         private val RECORD_ID = Regex("^[0-9a-f]{32}$")
         val ECLIPSE_ID = Regex("^\\d{4}-\\d{2}-\\d{2}-(solar|lunar)$")
 
+        /** A start in the contract's one format with the seconds at 00 (ts/core/alarms.ts START_TEXT). */
+        private val START_TEXT = Regex("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:00Z$")
+
+        /** An IANA region name: every segment starts with a capital letter, as the tz database's names do (ZONE_TEXT). */
+        private val ZONE_TEXT = Regex("^[A-Z][A-Za-z0-9_+-]*(/[A-Z][A-Za-z0-9_+-]*)*$")
+        private val CONTROL = Regex("[\\u0000-\\u001f\\u007f-\\u009f]")
+
         fun isRecordId(id: Any?): Boolean = id is String && RECORD_ID.matches(id)
+
+        /** The epoch ms of a start text, or null unless it is a real instant in the contract's format with the seconds at 00. */
+        fun startMs(text: Any?): Long? {
+            if (text !is String || !START_TEXT.matches(text)) return null
+            val ms = try {
+                Instant.parse(text).toEpochMilli()
+            } catch (_: Exception) {
+                return null
+            }
+            // A round trip, as the page's: 24:00 is read by some parsers as the next day.
+            return ms.takeIf { Json.instant(it) == text }
+        }
+
+        /** The zone in [text] when it is an IANA region name this device knows (never a fixed offset, never a prefix form), else null. */
+        fun regionZone(text: Any?): ZoneId? {
+            if (text !is String || text.length > 200 || !ZONE_TEXT.matches(text)) return null
+            val zone = try {
+                ZoneId.of(text)
+            } catch (_: Exception) {
+                return null
+            }
+            // ZoneId.of reads "Z" and "UTC+3" as an offset or a prefix form whose id differs from the text.
+            return zone.takeIf { it !is java.time.ZoneOffset && it.id == text }
+        }
+
+        /** True for a place name as a version 2 record keeps it: 1 to 200 characters, no control character. */
+        fun isPlace(text: Any?): Boolean = text is String && text.length in 1..200 && !CONTROL.containsMatchIn(text)
 
         /** The record in [raw], or null unless it is valid (isValidRecord). */
         fun parse(raw: Any?): AlarmRecord? {
-            if (raw !is JSONObject || raw.length() != 4) return null
+            if (raw !is JSONObject) return null
             val v = Json.wholeNumber(raw.opt("v")) ?: return null
-            if (v != 1L) return null
+            if (v != 1L && v != 2L) return null
+            if (raw.length() != if (v == 1L) 4 else 7) return null
             val id = raw.opt("id")
             if (!isRecordId(id)) return null
             val eclipseId = raw.opt("eclipseId") as? String ?: return null
             if (!ECLIPSE_ID.matches(eclipseId)) return null
             val spec = AlarmSpec.parse(raw.opt("spec")) ?: return null
-            return AlarmRecord(id as String, eclipseId, spec)
+            if (v == 1L) return AlarmRecord(id as String, eclipseId, spec)
+            val start = startMs(raw.opt("start")) ?: return null
+            val zone = regionZone(raw.opt("zone")) ?: return null
+            val place = raw.opt("place")
+            if (!isPlace(place)) return null
+            return AlarmRecord(id as String, eclipseId, spec, LocalAnchor(start, zone, place as String))
         }
 
         /**
@@ -147,6 +207,14 @@ object Planner {
     /** How long after greatest eclipse a record is kept at most (FIX-2: 48 hours, spec 9.4). */
     const val RECORD_GRACE_MS = 48L * 3_600_000L
 
+    /**
+     * The most a version 2 record's start may differ from greatest eclipse (ts/core/alarms.ts
+     * MAX_START_OFFSET_MS). The start at a city is never more than 3.1 hours from it (the largest of
+     * 2,137 city cases); this device cannot work a local start out itself, so the bound is the check
+     * it has: a record outside it cannot come from the page.
+     */
+    const val MAX_START_OFFSET_MS = 6L * 3_600_000L
+
     private const val MINUTE = 60_000L
     private val HHMM = DateTimeFormatter.ofPattern("HH:mm")
 
@@ -172,21 +240,37 @@ object Planner {
     /** The local date of an instant in [zone]. */
     fun localDate(zone: ZoneId, epochMs: Long): LocalDate = Instant.ofEpochMilli(epochMs).atZone(zone).toLocalDate()
 
-    /** The instant an alarm rings, and how a clock change was resolved. */
-    fun fireInstant(greatest: String, spec: AlarmSpec, zone: ZoneId): Pair<Long, Dst> {
-        val g = greatestMinute(greatest)
-        return when (spec) {
-            is AlarmSpec.Before -> (g - spec.minutes * MINUTE) to Dst.NONE
-            is AlarmSpec.Day -> {
-                val day = localDate(zone, g).minusDays(spec.daysBefore.toLong())
-                wallTimeToInstant(zone, day, LocalTime.parse(spec.time, HHMM))
-            }
+    /**
+     * The instant an alarm rings, and how a clock change was resolved, counted from [anchor] (a
+     * whole minute): greatest eclipse (rounded) for a version 1 record, the start at the city for a
+     * version 2 record. "Before" is minutes before the anchor; "at a time of day" is that wall time
+     * in [zone] on the local date of the anchor in [zone], less the days chosen (fireInstantAt).
+     */
+    fun fireInstantAt(anchor: Long, spec: AlarmSpec, zone: ZoneId): Pair<Long, Dst> = when (spec) {
+        is AlarmSpec.Before -> (anchor - spec.minutes * MINUTE) to Dst.NONE
+        is AlarmSpec.Day -> {
+            val day = localDate(zone, anchor).minusDays(spec.daysBefore.toLong())
+            wallTimeToInstant(zone, day, LocalTime.parse(spec.time, HHMM))
         }
     }
 
-    /** One alarm, planned; its status is ok or past (planAlarm). */
-    fun planAlarm(greatest: String, spec: AlarmSpec, zone: ZoneId, now: Long): PlannedAlarm {
-        val (at, dst) = fireInstant(greatest, spec, zone)
+    /** The instant an alarm rings, counted from greatest eclipse, and how a clock change was resolved. */
+    fun fireInstant(greatest: String, spec: AlarmSpec, zone: ZoneId): Pair<Long, Dst> =
+        fireInstantAt(greatestMinute(greatest), spec, zone)
+
+    /** The minute a record counts from: the start at its city (version 2), else greatest eclipse. */
+    fun anchorOf(record: AlarmRecord, eclipse: Eclipse): Long = record.local?.start ?: greatestMinute(eclipse.greatest)
+
+    /** The zone a record works in: its city's (version 2, wherever the phone is), else the phone's [phone]. */
+    fun zoneOf(record: AlarmRecord, phone: ZoneId): ZoneId = record.local?.zone ?: phone
+
+    /** The instant a stored record rings now: from its own anchor, in its own zone. */
+    fun fireInstantFor(record: AlarmRecord, eclipse: Eclipse, phone: ZoneId): Long =
+        fireInstantAt(anchorOf(record, eclipse), record.spec, zoneOf(record, phone)).first
+
+    /** One alarm, planned from an anchor minute; its status is ok or past (planAlarmAt). */
+    fun planAlarmAt(anchor: Long, spec: AlarmSpec, zone: ZoneId, now: Long): PlannedAlarm {
+        val (at, dst) = fireInstantAt(anchor, spec, zone)
         val local = Instant.ofEpochMilli(at).atZone(zone)
         return PlannedAlarm(
             spec = spec,
@@ -195,10 +279,14 @@ object Planner {
             localTime = local.toLocalTime().format(HHMM),
             offsetMinutes = local.offset.totalSeconds / 60,
             status = if (at > now) "ok" else "past",
-            afterGreatest = at > greatestMinute(greatest),
+            afterGreatest = at > anchor,
             dst = dst,
         )
     }
+
+    /** One alarm, planned from greatest eclipse (planAlarm). */
+    fun planAlarm(greatest: String, spec: AlarmSpec, zone: ZoneId, now: Long): PlannedAlarm =
+        planAlarmAt(greatestMinute(greatest), spec, zone, now)
 
     /** Several alarms for one eclipse; a later one at the same minute as an earlier one is a duplicate. */
     fun planAlarms(greatest: String, specs: List<AlarmSpec>, zone: ZoneId, now: Long): List<PlannedAlarm> {
@@ -217,14 +305,19 @@ object Planner {
     /**
      * What a re-plan does with one stored record [raw] (spec 9.4, code review C-1), in this order:
      * invalid, unknown eclipse, 48 hours after greatest eclipse (expired, without working out a
-     * time), its own time worked out now in [zone] is after now (arm), otherwise passed. A missed
+     * time), a version 2 start more than [MAX_START_OFFSET_MS] from greatest eclipse (invalid), its
+     * own time worked out now (in [zone] for a version 1 record, in its city's zone for a version 2
+     * record) is after now (arm), otherwise passed. A missed
      * alarm is never rung late: it is deleted (C-23).
      */
     fun recordFate(raw: Any?, eclipse: Eclipse?, zone: ZoneId, now: Long): RecordFate {
         val record = AlarmRecord.parse(raw) ?: return RecordFate.Delete("invalid")
         if (eclipse == null || eclipse.id != record.eclipseId) return RecordFate.Delete("unknown-eclipse")
         if (now >= greatestMinute(eclipse.greatest) + RECORD_GRACE_MS) return RecordFate.Delete("expired")
-        val (fireAt, _) = fireInstant(eclipse.greatest, record.spec, zone)
+        // A version 2 start far from greatest eclipse cannot come from the page: invalid, after the expiry test.
+        val local = record.local
+        if (local != null && Math.abs(local.start - greatestMinute(eclipse.greatest)) > MAX_START_OFFSET_MS) return RecordFate.Delete("invalid")
+        val fireAt = fireInstantFor(record, eclipse, zone)
         return if (fireAt > now) RecordFate.Arm(fireAt) else RecordFate.Delete("passed")
     }
 }

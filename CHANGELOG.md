@@ -2,6 +2,13 @@
 
 EclipseTracker for Android, newest first. The release text of each version, which GitHub Releases and Zapstore show, is in `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt`. The website, eclipse.stormberry.as, is published from the same repository.
 
+## 2.1.0 (versionCode 20100)
+
+- New, in both editions: Filter by city. Choose a city by hand from the built-in list (the shared Stormberry Labs catalogue, 25,007 cities, city data from GeoNames and Kartverket under CC BY 4.0). The countdown and the list then show only the eclipses that can be seen from there, with the time each starts there in that city's time zone, and the planner and the calendar file count from that start. The app keeps the city in its own preferences, left out of backups, not in the page: the WebView still has no storage. Clear city forgets it.
+- Ringing alarms with a city (the app from Zapstore and GitHub): an alarm set while a city is chosen rings at its time in that city, wherever the phone is, and its words name the city. Alarms set before 2.1.0, or with no city chosen, are unchanged and still follow the phone's time zone.
+- The Google Play edition (versionCode 1020100) has the city filter and the city calendar file, and still no ringing alarms and no permissions.
+- The app now bundles the city list and the eclipse elements for local times, about 420 KB more. The release workflow's list of expected web files now names `cities.js`, and a test makes it equal to `WebAssets.INCLUDES`.
+
 ## 2.0.1 (versionCode 20001)
 
 - The app you install from Zapstore or GitHub is unchanged apart from the version: the same eclipse list, countdown, ringing alarms and screens as 2.0.0, and the same nine permissions (`android/expected-permissions.txt`). No internet permission.

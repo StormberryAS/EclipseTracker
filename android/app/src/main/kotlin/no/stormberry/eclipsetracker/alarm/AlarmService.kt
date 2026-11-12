@@ -675,7 +675,7 @@ class AlarmService : Service() {
                 recordId = record.id,
                 eclipseId = record.eclipseId,
                 title = eclipse?.let { Words.eclipseName(it) } ?: context.getString(R.string.alarm_default_title),
-                text = Words.alarmWords(record.spec),
+                text = Words.alarmWords(record),
                 fireAt = 0L,
             )
             postMissedNotice(context, alarm, R.string.missed_not_rung_text)

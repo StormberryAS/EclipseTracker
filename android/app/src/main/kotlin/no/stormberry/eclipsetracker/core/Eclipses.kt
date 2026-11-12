@@ -55,9 +55,18 @@ object Words {
     /** "Annular solar eclipse". */
     fun eclipseName(e: Eclipse): String = "${TYPE.getValue(e.type)} ${e.kind} eclipse"
 
-    /** "On the day of the eclipse at 12:00", "30 minutes before greatest eclipse". */
-    fun alarmWords(spec: AlarmSpec): String = when (spec) {
-        is AlarmSpec.Before -> "${BEFORE.getValue(spec.minutes)} before greatest eclipse"
-        is AlarmSpec.Day -> "${DAY.getValue(spec.daysBefore)} at ${spec.time}"
+    /**
+     * "On the day of the eclipse at 12:00", "30 minutes before greatest eclipse". With a [place] (an
+     * alarm set for a city, EclipseTracker 2.1.0) the words name it: "1 day before at 12:00 in
+     * Sydney, Australia", "30 minutes before the eclipse starts in Sydney, Australia".
+     */
+    fun alarmWords(spec: AlarmSpec, place: String? = null): String = when (spec) {
+        is AlarmSpec.Before ->
+            if (place == null) "${BEFORE.getValue(spec.minutes)} before greatest eclipse"
+            else "${BEFORE.getValue(spec.minutes)} before the eclipse starts in $place"
+        is AlarmSpec.Day -> "${DAY.getValue(spec.daysBefore)} at ${spec.time}" + (if (place == null) "" else " in $place")
     }
+
+    /** The words of a stored record: its place is named when it is a version 2 record. */
+    fun alarmWords(record: AlarmRecord): String = alarmWords(record.spec, record.local?.place)
 }

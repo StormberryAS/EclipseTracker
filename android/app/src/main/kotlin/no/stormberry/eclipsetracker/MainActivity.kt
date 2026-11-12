@@ -52,6 +52,7 @@ import no.stormberry.eclipsetracker.core.Json
 import no.stormberry.eclipsetracker.web.AlarmFreeBridge
 import no.stormberry.eclipsetracker.web.BridgeMessage
 import no.stormberry.eclipsetracker.web.CalendarHandover
+import no.stormberry.eclipsetracker.web.KeptCity
 import no.stormberry.eclipsetracker.web.NavigationPolicy
 import no.stormberry.eclipsetracker.web.TextScale
 import no.stormberry.eclipsetracker.web.WebAssetHandler
@@ -71,6 +72,8 @@ import java.util.concurrent.Executors
  *  - Add to calendar: the page's calendar file handed to the calendar app (ACTION_VIEW through a
  *    FileProvider limited to cache/calendar/), or the share sheet when no calendar app takes it;
  *  - Save the calendar file: Android's save screen, as GDPRLetterBuilder's Save;
+ *  - the chosen city (city.get, city.set; both editions, 2.1.0): kept in the app's own preferences
+ *    (eclipse_city), because the WebView's DOM storage stays off; checked by KeptCity;
  *  - the problems (notifications or exact or full-screen alarms refused) and the screens that fix them;
  *  - the disclaimer in a second WebView over the page, so Back returns to the page as it was;
  *  - Back: the page closes its planner if it is open; otherwise the app closes;
@@ -284,7 +287,8 @@ class MainActivity : ComponentActivity() {
         view.settings.apply {
             javaScriptEnabled = script
             // The page stores nothing (PRIV-1): no localStorage, no IndexedDB. The alarms the person
-            // sets are stored by the app itself, not by the page.
+            // sets and the city the person chooses (city.get, city.set) are stored by the app itself,
+            // not by the page.
             domStorageEnabled = false
             allowFileAccess = false
             allowContentAccess = false
@@ -446,6 +450,55 @@ class MainActivity : ComponentActivity() {
             is BridgeMessage.Calendar -> calendar(msg, proxy)
             is BridgeMessage.FixProblem -> fixProblem(msg.problem)
             is BridgeMessage.BackResult -> onBackResult(msg.q, msg.handled)
+            is BridgeMessage.GetCity -> getCity(msg, proxy)
+            is BridgeMessage.SetCity -> setCity(msg, proxy)
+        }
+    }
+
+    // ---------------------------------------------------------------- the chosen city (2.1.0)
+
+    private fun cityMessage(id: Int?, ok: Boolean, city: String?, withCity: Boolean): JSONObject {
+        val msg = JSONObject().put("type", "city").put("ok", ok)
+        if (id != null) msg.put("id", id)
+        if (withCity) msg.put("city", city ?: JSONObject.NULL)
+        return msg
+    }
+
+    /**
+     * The kept city's text, or null. A text that fails KeptCity is removed and answered as null, so a
+     * damaged store cannot reach the page. The preferences are credential-protected storage: the
+     * city is needed only while the page is open, and the alarm engine never reads it (a version 2
+     * record carries its own start, zone and place).
+     */
+    @SuppressLint("ApplySharedPref", "UseKtx") // commit(): on the io thread, and the reply must follow the write; KTX edit() hides commit()'s result
+    private fun getCity(msg: BridgeMessage.GetCity, proxy: JavaScriptReplyProxy) {
+        io.execute {
+            val prefs = getSharedPreferences(CITY_PREFS, MODE_PRIVATE)
+            val kept = try {
+                prefs.getString(CITY_KEY, null)
+            } catch (_: Exception) {
+                null
+            }
+            val text = if (kept != null && KeptCity.check(kept)) kept else null
+            if (kept != null && text == null) prefs.edit().remove(CITY_KEY).commit()
+            post(proxy, cityMessage(msg.id, ok = true, city = text, withCity = true))
+        }
+    }
+
+    /** Keeps the city's text (checked) or forgets it for null; answers ok only once the write is done (commit). */
+    @SuppressLint("ApplySharedPref", "UseKtx") // commit(): on the io thread, so ok:true is sent only after a write that reported success
+    private fun setCity(msg: BridgeMessage.SetCity, proxy: JavaScriptReplyProxy) {
+        io.execute {
+            val text = msg.city
+            val ok = when {
+                text == null -> getSharedPreferences(CITY_PREFS, MODE_PRIVATE).edit().remove(CITY_KEY).commit()
+                KeptCity.check(text) -> getSharedPreferences(CITY_PREFS, MODE_PRIVATE).edit().putString(CITY_KEY, text).commit()
+                else -> {
+                    Log.w(TAG, "city.set refused")
+                    false
+                }
+            }
+            post(proxy, cityMessage(msg.id, ok, null, withCity = false))
         }
     }
 
@@ -632,6 +685,10 @@ class MainActivity : ComponentActivity() {
         private const val BRIDGE_NAME = "ETBridge"
         private const val CALENDAR_TYPE = "text/calendar"
         private const val CALENDAR_DIR = "calendar"
+
+        /** The chosen city (2.1.0): preferences file and key. Both are left out of backup and device transfer (the root domain). */
+        private const val CITY_PREFS = "eclipse_city"
+        private const val CITY_KEY = "city"
         private const val BACK_ANSWER_MS = 1_500L
     }
 }

@@ -260,11 +260,15 @@ android {
         // sovereign APK keeps every permission, component and screen it had; Edition.ALARMS is true
         // in it. See fastlane changelogs/20001.txt.
         //
+        // 2.1.0 (code 20100), 12 November 2026: the city filter in the app, the city kept in the app's
+        // preferences, and ringing alarms that count from the start in the city (version 2 records).
+        // See fastlane changelogs/20100.txt.
+        //
         // ONE VISIBLE VERSION, TWO CODE LINES. The sovereign versionCode and versionName on the next
         // lines are the only numbers bumped by hand. The Play build derives its code from them and
         // shows the same name:
-        //   Play versionCode = 1,000,000 + sovereign versionCode   (2.0.1 code 20001 -> code 1020001)
-        //   Play versionName = sovereign versionName               (2.0.1 -> 2.0.1)
+        //   Play versionCode = 1,000,000 + sovereign versionCode   (2.1.0 code 20100 -> code 1020100)
+        //   Play versionName = sovereign versionName               (2.1.0 -> 2.1.0)
         // EclipseTracker's offset is 1,000,000, not the 1000 of MoonApp, SunApp and CheckLink: its
         // sovereign codes are major * 10000 + minor * 100 + patch, so 1000 + 20001 = 21001 would be
         // the code of a future sovereign 2.10.1 and the two lines would read alike. A million keeps
@@ -273,8 +277,8 @@ android {
         // within its own package only; the package name and the signing key are what keep the two
         // apart, not the version. Every Play upload is built from a sovereign release tag that
         // shipped on GitHub Releases, never from an untagged tree (the table is in README.md).
-        versionCode = 20001
-        versionName = "2.0.1"
+        versionCode = 20100
+        versionName = "2.1.0"
         if (playBuild) {
             versionCode = PLAY_VERSION_CODE_OFFSET + versionCode!!
         }
@@ -468,8 +472,14 @@ object WebAssets {
     //   fonts/**/*.css, *.woff2        Inter, self-hosted
     //   switcher-icons/*.svg           the footer carousel, referenced from the site root
     //   data/eclipses.json             the eclipse list for the native alarm engine (spec 9.3)
+    //   cities.js                      the shared Labs city catalogue (25,007 cities, GeoNames and
+    //                                  Kartverket, CC BY 4.0), added to the page by app.js only when
+    //                                  the city chooser is first used (2.1.0). The release workflow
+    //                                  (.github/workflows/android-release.yml) keeps a copy of this
+    //                                  list; tests/android-app.test.ts proves the two agree.
     val INCLUDES = listOf(
         "index.html", "app.js", "style.css", "favicon.svg", "apple-touch-icon.png", "disclaimer.html",
+        "cities.js",
         "core/*.js",
         "data/eclipses.json",
         "fonts/**/*.css", "fonts/**/*.woff2",
@@ -1111,7 +1121,13 @@ val prepareLicenceAssets = tasks.register<PrepareLicenceAssets>("prepareLicenceA
                 append("The bundled web app (assets/web/, the same files eclipse.stormberry.as serves) ships no\n")
                 append("third-party code. It carries the Inter typeface (assets/web/fonts/inter/), under the SIL\n")
                 append("Open Font License 1.1, full text in Inter-OFL-1.1.txt, and NASA's eclipse catalogue\n")
-                append("(Fred Espenak, NASA Goddard Space Flight Center), which is in the public domain.\n\n")
+                append("(Fred Espenak, NASA Goddard Space Flight Center), which is free to reproduce with the\n")
+                append("acknowledgment NASA asks for. For the local times of an eclipse at a city it carries the\n")
+                append("Besselian elements and lunar eclipse elements of the Five Millennium Canons (Fred Espenak\n")
+                append("and Jean Meeus), and the shared city catalogue (assets/web/cities.js, city data from\n")
+                append("GeoNames and from Kartverket's Sentralt stedsnavnregister), under the Creative Commons\n")
+                append("Attribution 4.0 licence (CC BY 4.0), credited in the page's footer and in\n")
+                append("EclipseTracker-MIT.txt.\n\n")
                 append("The Android app's release build depends on the libraries below, all licensed under the\n")
                 append("Apache License, Version 2.0, full text in Apache-2.0.txt. R8 leaves out the parts the app\n")
                 append("does not use, so some of them add no code at all.\n\n")
@@ -1257,6 +1273,8 @@ tasks.withType<Test>().configureEach {
     systemProperty("eclipsetracker.webRoot", webRootDir.absolutePath)
     inputs.files(
         File(webRootDir, "tests/alarm-vectors.json"), File(webRootDir, "tests/record-vectors.json"),
+        File(webRootDir, "tests/city-record-vectors.json"), File(webRootDir, "tests/stored-city-vectors.json"),
+        File(webRootDir, "cities.js"),
         File(webRootDir, "tests/dst-vectors.json"), File(webRootDir, "tests/goldens/eclipse-2027-02-06-solar.ics"),
         File(webRootDir, "data/eclipses.json"), File(webRootDir, "index.html"),
         // The edition tests (PlayManifestTest, EditionTest) read these sources (29 October 2026).

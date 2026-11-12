@@ -85,13 +85,42 @@ export interface PlannedAlarm {
  * The record stage B stores for each alarm (spec section 9.4). Plain JSON, exactly these four keys.
  * The id is random and never reused, so the Android request code derived from it stays stable for
  * the alarm's life. There is no on/off flag: an alarm the person no longer wants is deleted
- * (code review C-14, 2026-10-16).
+ * (code review C-14, 2026-10-16). Version 1 counts from greatest eclipse in the phone's zone.
  */
-export interface AlarmRecord {
+export interface AlarmRecordV1 {
   readonly v: 1;
   readonly id: string;
   readonly eclipseId: string;
   readonly spec: AlarmSpec;
+}
+
+/**
+ * The record of an alarm set while a city is chosen (EclipseTracker 2.1.0, version 2): exactly
+ * seven keys. It counts from `start`, the minute the eclipse starts at the city (UTC, seconds 00,
+ * as the planner showed it), in `zone`, the city's IANA time zone, wherever the phone is. `place`
+ * is "name, country" as the page shows it; the alarm's words name it. The record holds no
+ * coordinates: Android has no local-circumstance engine and rings from the start the person saw.
+ */
+export interface AlarmRecordV2 {
+  readonly v: 2;
+  readonly id: string;
+  readonly eclipseId: string;
+  readonly spec: AlarmSpec;
+  /** The minute the eclipse starts at the city, in the contract's one format (UTC, seconds 00): "2027-07-18T15:57:00Z". */
+  readonly start: string;
+  /** The city's time zone: an IANA region name, never a fixed offset. */
+  readonly zone: string;
+  /** "Sydney, Australia": 1 to 200 characters, no control character. */
+  readonly place: string;
+}
+
+export type AlarmRecord = AlarmRecordV1 | AlarmRecordV2;
+
+/** Where a version 2 record counts from: the local start (epoch ms, a whole minute), the city's zone and its name. */
+export interface LocalAnchor {
+  readonly start: number;
+  readonly zone: string;
+  readonly place: string;
 }
 
 /**

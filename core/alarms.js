@@ -1,4 +1,4 @@
-import { greatestMinute } from './format.js?v=635b29f8';
+import { greatestMinute, minuteOf } from './format.js?v=118a26b0';
 import { addDays, isKnownZone, isWallTime, localDateTime, offsetMinutes, wallTimeToInstant } from './zoned.js?v=d3e47120';
 export const MAX_ALARMS = 8;
 export const DEFAULT_TIME = '12:00';
@@ -8,12 +8,21 @@ export function defaultSpecAt(anchor, zone) {
         ? { kind: 'day', daysBefore: 1, time: DEFAULT_TIME }
         : { kind: 'day', daysBefore: 0, time: DEFAULT_TIME };
 }
+export function plannerFrame(e, start, cityZone, deviceZone) {
+    return start === undefined
+        ? { anchor: greatestMinute(e), zone: deviceZone, local: false }
+        : { anchor: minuteOf(start), zone: cityZone, local: true };
+}
 export const DAYS_BEFORE = [0, 1, 2, 3, 7];
 export const MINUTES_BEFORE = [15, 30, 60, 120];
 export const RECORD_GRACE_MS = 48 * 3600000;
+export const MAX_START_OFFSET_MS = 6 * 3600000;
 const MINUTE = 60000;
 const RECORD_ID = /^[0-9a-f]{32}$/;
 const ECLIPSE_ID = /^\d{4}-\d{2}-\d{2}-(solar|lunar)$/;
+const START_TEXT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/;
+const ZONE_TEXT = /^[A-Z][A-Za-z0-9_+-]*(\/[A-Z][A-Za-z0-9_+-]*)*$/;
+const PLACE_BAD = /[\u0000-\u001f\u007f-\u009f]/;
 export function fireInstantAt(anchor, spec, zone) {
     if (spec.kind === 'before')
         return { epochMs: anchor - spec.minutes * MINUTE, dst: 'none' };
@@ -78,12 +87,37 @@ export function isValidSpec(spec) {
 export function isRecordId(id) {
     return typeof id === 'string' && RECORD_ID.test(id);
 }
+function startMs(text) {
+    if (typeof text !== 'string' || !START_TEXT.test(text))
+        return undefined;
+    const ms = Date.parse(text);
+    return Number.isNaN(ms) || new Date(ms).toISOString().replace('.000Z', 'Z') !== text ? undefined : ms;
+}
+function isRecordZone(zone) {
+    return typeof zone === 'string' && zone.length <= 200 && ZONE_TEXT.test(zone) && isKnownZone(zone);
+}
+export function isPlace(place) {
+    return typeof place === 'string' && place.length >= 1 && place.length <= 200 && !PLACE_BAD.test(place);
+}
 export function isValidRecord(r) {
     if (!r || typeof r !== 'object' || Array.isArray(r))
         return false;
     const o = r;
-    return Object.keys(o).length === 4 && o.v === 1 && isRecordId(o.id) && typeof o.eclipseId === 'string'
-        && ECLIPSE_ID.test(o.eclipseId) && isValidSpec(o.spec);
+    const common = isRecordId(o.id) && typeof o.eclipseId === 'string' && ECLIPSE_ID.test(o.eclipseId) && isValidSpec(o.spec);
+    if (o.v === 1)
+        return Object.keys(o).length === 4 && common;
+    if (o.v === 2)
+        return Object.keys(o).length === 7 && common && startMs(o.start) !== undefined && isRecordZone(o.zone) && isPlace(o.place);
+    return false;
+}
+export function recordAnchor(record, eclipse) {
+    return record.v === 2 ? Date.parse(record.start) : greatestMinute(eclipse);
+}
+export function recordZone(record, zone) {
+    return record.v === 2 ? record.zone : zone;
+}
+export function planRecord(record, eclipse, zone, now) {
+    return planAlarmAt(recordAnchor(record, eclipse), record.spec, recordZone(record, zone), now);
 }
 export function isValidRecordSet(records) {
     if (!Array.isArray(records))
@@ -108,7 +142,9 @@ export function recordFate(record, eclipse, zone, now) {
         return { action: 'delete', reason: 'unknown-eclipse' };
     if (now >= greatestMinute(eclipse) + RECORD_GRACE_MS)
         return { action: 'delete', reason: 'expired' };
-    const { fireAt } = planAlarm(eclipse, record.spec, zone, now);
+    if (record.v === 2 && Math.abs(Date.parse(record.start) - greatestMinute(eclipse)) > MAX_START_OFFSET_MS)
+        return { action: 'delete', reason: 'invalid' };
+    const { fireAt } = planRecord(record, eclipse, zone, now);
     return fireAt > now ? { action: 'arm', fireAt } : { action: 'delete', reason: 'passed' };
 }
 export function rowsFromRecords(records, eclipseId) {
@@ -117,12 +153,17 @@ export function rowsFromRecords(records, eclipseId) {
         .slice(0, MAX_ALARMS)
         .map((r) => ({ id: r.id, spec: r.spec }));
 }
-export function recordsFromRows(eclipseId, rows, newId) {
+export function recordsFromRows(eclipseId, rows, newId, local) {
     if (!ECLIPSE_ID.test(eclipseId))
         throw new RangeError(`not an eclipse id: ${eclipseId}`);
     if (rows.length > MAX_ALARMS)
         throw new RangeError(`at most ${MAX_ALARMS} alarms per eclipse, not ${rows.length}`);
-    const records = rows.map((row) => ({ v: 1, id: row.id ?? newId(), eclipseId, spec: row.spec }));
+    const records = rows.map((row) => {
+        const id = row.id ?? newId();
+        if (!local)
+            return { v: 1, id, eclipseId, spec: row.spec };
+        return { v: 2, id, eclipseId, spec: row.spec, start: new Date(local.start).toISOString().replace('.000Z', 'Z'), zone: local.zone, place: local.place };
+    });
     if (!isValidRecordSet(records))
         throw new RangeError('the rows do not make a valid set of records');
     return records;

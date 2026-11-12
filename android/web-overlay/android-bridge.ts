@@ -11,7 +11,9 @@
  * The page (app.js) looks for window.EclipseTrackerApp, which this script sets, and through it:
  *   - opens the planner with the alarms the app has stored for that eclipse (spec 9.6, 9.8);
  *   - saves the calendar file through Android's save screen instead of a download;
- *   - shows the app's travel note instead of the website's two travel sentences (spec 9.9).
+ *   - shows the app's travel note instead of the website's two travel sentences (spec 9.9);
+ *   - offers the city filter (cities: true) and keeps the chosen city in the app's own preferences,
+ *     because the WebView's DOM storage stays off (loadCity, saveCity; EclipseTracker 2.1.0).
  * Everything the app adds to the page is made here, with the app's own words (every one of them
  * new, awaiting Marcos's approval, listed in the stage B report):
  *   - in the planner, "Set ringing alarms" beside "Save the calendar file" (spec 9.1), and "Add to
@@ -20,8 +22,15 @@
  *     rings, a way to change and to delete each, and what the phone refuses with a way to fix it
  *     (spec 9.8);
  *   - Android's Back: it closes the planner when it is open, otherwise the app closes.
- * The planner's closing note says the app keeps the ringing alarms on the phone (the website's
- * "keeps nothing" is not true inside the app).
+ * The planner's closing note says what the app keeps on the phone: the ringing alarms, the city, if
+ * any, and the last calendar file (the website's "keeps nothing" is not true inside the app).
+ *
+ * THE CITY (EclipseTracker 2.1.0). With a city chosen the page counts from the minute the eclipse
+ * starts there. An alarm set then is a version 2 record: { v: 2, id, eclipseId, spec, start, zone,
+ * place }. The app rings it from start, in the city's zone, wherever the phone is, and its words
+ * name the place. An alarm set with no city is a version 1 record, as before: it counts from
+ * greatest eclipse in the phone's zone. The page builds the records (core recordsFromRows with the
+ * `local` anchor its ringingRows() gives); this script only passes them on.
  *
  * THE GOOGLE PLAY EDITION (29 October 2026) has no ringing alarms. The build tells this script so
  * through the one line it injects: <script src="android-bridge.js" data-edition="play"> (the
@@ -39,7 +48,8 @@
  * ONLY into pages from https://appassets.androidplatform.net. It carries JSON text only, and the
  * app checks every message again (BridgeMessage.kt, CalendarHandover.kt, the record checks): the
  * app never takes a fire time, a path or a file name from the page as it is. No fetch, no XHR, no
- * storage: the page's own policy (connect-src 'none') stays intact, and the app keeps the records.
+ * storage: the page's own policy (connect-src 'none') stays intact, and the app keeps the records
+ * and the city.
  *
  * THE MESSAGES (JSON text, v: 1; spec 9.6 and the stage B additions marked +):
  *   page to app
@@ -48,11 +58,14 @@
  *     { v, type: 'alarms.set', id, eclipseId, records }          replaces that eclipse's records
  *     { v, type: 'calendar.add', id, fileName, ics }             the calendar app, or the share sheet
  *     { v, type: 'calendar.save', id, fileName, ics }            + Android's save screen
+ *     { v, type: 'city.get', id }                                + the kept city (2.1.0)
+ *     { v, type: 'city.set', id, city }                          + keeps the city's text, or forgets it for null (2.1.0)
  *     { v, type: 'problem.fix', problem }                        + the screen that fixes a problem
  *     { v, type: 'back.result', q, handled }                     + the answer to Back q
  *   app to page
  *     { v, type: 'alarms', id?, ok, records, armed: [{ id, fireAt }], problems }
  *     { v, type: 'calendar.result', id?, ok, via: 'calendar' | 'share' | 'save', cancelled? }   +
+ *     { v, type: 'city', id?, ok, city? }                        + the answer to city.get (city: the kept text or null) and to city.set
  *     { v, type: 'back', q }                                     + Android's Back
  *   The optional id (+) is the request an answer is for; an alarms message without one is news
  *   (the app re-planned on its own, after Settings or a change of time zone).
@@ -94,6 +107,7 @@ interface Incoming {
   readonly ok?: unknown;
   readonly via?: unknown;
   readonly cancelled?: unknown;
+  readonly city?: unknown;
   readonly records?: unknown;
   readonly armed?: unknown;
   readonly problems?: unknown;
@@ -176,11 +190,12 @@ interface Outgoing {
     ADD: 'Add to calendar',
     /* Marcos's text, 16 October 2026, exactly as written (spec 9.9, A4). */
     TRAVEL: "Ringing alarms follow your phone's time zone: if you travel, a 12.00 alarm rings at 12.00 where you are. Alarms before greatest eclipse always follow the eclipse.",
-    /* Replaces the planner note's last sentence, "EclipseTracker sends nothing and keeps nothing." */
-    KEEPS: 'EclipseTracker sends nothing; the ringing alarms you set are kept on this phone only.',
-    /* The same sentence in the Google Play edition, which keeps no alarm but does keep the last file
-       handed to the calendar app until the app next starts afresh (29 October 2026, DRAFT). */
-    PLAY_KEEPS: 'EclipseTracker sends nothing; it keeps only the last file you added to your calendar, until the app next starts afresh.',
+    /* Replaces the planner note's last sentence, "EclipseTracker sends nothing and keeps nothing." The app
+       also keeps the city the person chooses (12 November 2026, 2.1.0, DRAFT for Marcos's approval). */
+    KEEPS: 'EclipseTracker sends nothing. It keeps only the ringing alarms you set, the city you choose, if any, and the last file you added to your calendar, which it deletes when the app next starts afresh.',
+    /* The same sentence in the Google Play edition, which keeps no alarm but does keep the city and the
+       last file handed to the calendar app until the app next starts afresh (12 November 2026, DRAFT). */
+    PLAY_KEEPS: 'EclipseTracker sends nothing. It keeps only the city you choose, if any, and the last file you added to your calendar, which it deletes when the app next starts afresh.',
     SET_ONE: '1 ringing alarm set.',
     SET_MANY: '{n} ringing alarms set.',
     SET_NONE: 'No ringing alarm is set for this eclipse.',
@@ -287,6 +302,20 @@ interface Outgoing {
   const travel: { travelNote?: string } = PLAY ? {} : { travelNote: T.TRAVEL };
   window.EclipseTrackerApp = Object.freeze({
     ...travel,
+    /* The city filter is offered in both editions (2.1.0): the app keeps the chosen city (city.get,
+       city.set), so the page's line "Your city stays on this phone only. Clear it with the Clear city
+       button." is true. */
+    cities: true,
+    loadCity: function (): Promise<string | null> {
+      return ask({ type: 'city.get' }, 3000).then(function (answer) {
+        return answer && answer.type === 'city' && answer.ok === true && (typeof answer.city === 'string' || answer.city === null) ? answer.city : null;
+      });
+    },
+    saveCity: function (text: string | null): Promise<boolean> {
+      return ask({ type: 'city.set', city: text }).then(function (answer) {
+        return !!(answer && answer.type === 'city' && answer.ok === true);
+      });
+    },
     rowsFor: function (eclipseId: string): Promise<PlannerRow[]> {
       /* The Play edition stores no alarm: the planner opens with the page's default, as on the website. */
       if (PLAY) return Promise.resolve([]);
@@ -304,6 +333,9 @@ interface Outgoing {
       /* Fix D (17 October 2026, N-2): the zone the page starts in, so a change of zone in the first
          minute is seen as one at the next look and the armed times are asked for again. */
       lastZone = page.zone();
+      /* The Clear city button is 48 px tall in the app, as the app's own buttons (touchSize); the website keeps 44. */
+      const clearCity = document.getElementById('city-clear-btn');
+      if (clearCity instanceof HTMLButtonElement) touchSize(clearCity);
       setUpPlanner();
       if (PLAY) return;
       setUpOverview();
@@ -363,7 +395,7 @@ interface Outgoing {
     if (!plan) return;
     let records: AlarmRecord[];
     try {
-      records = pg.core.recordsFromRows(plan.eclipse.id, plan.rows.map(function (r): PlannerRow { return r.id ? { id: r.id, spec: r.spec } : { spec: r.spec }; }), randomId);
+      records = pg.core.recordsFromRows(plan.eclipse.id, plan.rows.map(function (r): PlannerRow { return r.id ? { id: r.id, spec: r.spec } : { spec: r.spec }; }), randomId, plan.local);
     } catch (e) {
       pg.say(T.SET_FAILED);
       return;
@@ -492,7 +524,7 @@ interface Outgoing {
       const e = core.eclipseById(r.eclipseId);
       if (!e) return;
       const armedAt = state.armed.get(r.id);
-      const at = armedAt !== undefined ? armedAt : core.planAlarm(e, r.spec, zone, now).fireAt;
+      const at = armedAt !== undefined ? armedAt : core.planRecord(r, e, zone, now).fireAt;
       let g = groups.get(e.id);
       if (!g) {
         g = { e: e, alarms: [] };
@@ -517,7 +549,7 @@ interface Outgoing {
       ul.style.padding = '0';
       g.alarms.sort(function (a, b) { return a.at - b.at; }).forEach(function (a) {
         const li = el('li', 'eclipse-item');
-        const what = core.alarmWords(a.r.spec);
+        const what = core.alarmWords(a.r.spec, a.r.v === 2 ? a.r.place : undefined);
         li.append(el('p', 'eclipse-region', what));
         li.append(el('p', 'eclipse-when', 'Rings ' + core.localWhen(zone, a.at) + '.'));
         const actions = el('div', 'planner-actions');

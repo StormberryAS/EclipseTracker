@@ -21,6 +21,9 @@ import org.json.JSONObject
  *                                                               through Android's save screen
  *   { v, type: "problem.fix", problem }                         stage B addition: open the screen that fixes a problem
  *   { v, type: "back.result", q, handled }                      stage B addition: the answer to Back q
+ *   { v, type: "city.get", id? }                                2.1.0: the city the app keeps (both editions)
+ *   { v, type: "city.set", id?, city }                          2.1.0: keep the city's text (a string), or forget it (null)
+ * The app answers both with { v, type: "city", id?, ok, city? }: city, on city.get, is the kept text or null.
  * The optional id (a positive whole number) is echoed in the answer, so the page can tell which
  * request an answer is for (stage B addition; the spec's messages carry none).
  */
@@ -31,6 +34,10 @@ sealed interface BridgeMessage {
     data class Calendar(val id: Int?, val save: Boolean, val fileName: Any?, val ics: Any?) : BridgeMessage
     data class FixProblem(val problem: String) : BridgeMessage
     data class BackResult(val q: Int, val handled: Boolean) : BridgeMessage
+    data class GetCity(val id: Int?) : BridgeMessage
+
+    /** [city] is the page's text of the chosen city, or null to forget it; KeptCity checks the text before it is kept. */
+    data class SetCity(val id: Int?, val city: String?) : BridgeMessage
 
     companion object {
         /** Far longer than any message the page sends (eight records, or a calendar file of 64 KB). */
@@ -44,6 +51,8 @@ sealed interface BridgeMessage {
             "calendar.save" to setOf("v", "type", "id", "fileName", "ics"),
             "problem.fix" to setOf("v", "type", "problem"),
             "back.result" to setOf("v", "type", "q", "handled"),
+            "city.get" to setOf("v", "type", "id"),
+            "city.set" to setOf("v", "type", "id", "city"),
         )
         private val REQUIRED = mapOf(
             "alarms.set" to setOf("eclipseId", "records"),
@@ -51,6 +60,7 @@ sealed interface BridgeMessage {
             "calendar.save" to setOf("fileName", "ics"),
             "problem.fix" to setOf("problem"),
             "back.result" to setOf("q", "handled"),
+            "city.set" to setOf("city"),
         )
 
         /** The checked message in [data], or null when it must be ignored. */
@@ -79,6 +89,16 @@ sealed interface BridgeMessage {
                 "calendar.add", "calendar.save" -> Calendar(id, type == "calendar.save", o.opt("fileName"), o.opt("ics"))
                 "problem.fix" -> FixProblem(o.opt("problem") as? String ?: return null)
                 "back.result" -> BackResult(positiveInt(o.opt("q")) ?: return null, o.opt("handled") as? Boolean ?: return null)
+                "city.get" -> GetCity(id)
+                "city.set" -> {
+                    // A string, or JSON null: anything else (a number, an object) is dropped whole.
+                    val city = o.opt("city")
+                    when {
+                        city == JSONObject.NULL -> SetCity(id, null)
+                        city is String -> SetCity(id, city)
+                        else -> null
+                    }
+                }
                 else -> null
             }
         }

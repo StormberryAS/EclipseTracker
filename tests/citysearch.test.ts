@@ -130,3 +130,10 @@ test('parseStoredCity rejects anything else', () => {
   // The edges that are allowed.
   assert.deepEqual(parseStoredCity(JSON.stringify({ ...stored, name: 'x'.repeat(200), lat: -90, lon: 180 })), { ...GOOD, name: 'x'.repeat(200), lat: -90, lon: 180 });
 });
+
+/** tests/stored-city-vectors.json: the texts that are a kept city. The app's KeptCity (Kotlin) reads the same file. */
+test('parseStoredCity (anyZone) agrees with the shared stored-city vectors that the app also reads (EclipseTracker 2.1.0)', () => {
+  const doc = JSON.parse(readFileSync(new URL('tests/stored-city-vectors.json', root), 'utf8')) as { cases: Array<{ name: string; text: string; valid: boolean }> };
+  assert.ok(doc.cases.length >= 40 && doc.cases.some((c) => c.valid) && doc.cases.some((c) => !c.valid));
+  for (const c of doc.cases) assert.equal(parseStoredCity(c.text, { anyZone: true }) !== null, c.valid, c.name);
+});

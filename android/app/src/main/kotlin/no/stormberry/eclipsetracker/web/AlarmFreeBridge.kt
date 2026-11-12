@@ -13,8 +13,8 @@ import org.json.JSONObject
  * anyway, the app does not touch the alarm engine, which the Play bundle does not even contain. It
  * answers alarms.list and alarms.set with ok:false and no records, nothing armed and no problem, so
  * a page waiting for an answer gets one, and it drops problem.fix (there is no alarm whose problem
- * could be fixed). Everything else, the calendar file, Save, Back and hello, is handled as in the
- * sovereign edition.
+ * could be fixed). Everything else, the calendar file, Save, Back, hello and the kept city (2.1.0), is
+ * handled as in the sovereign edition.
  */
 object AlarmFreeBridge {
     enum class Action {
@@ -32,6 +32,9 @@ object AlarmFreeBridge {
         is BridgeMessage.ListAlarms, is BridgeMessage.SetAlarms -> Action.REFUSE
         is BridgeMessage.FixProblem -> Action.IGNORE
         BridgeMessage.Hello, is BridgeMessage.Calendar, is BridgeMessage.BackResult -> Action.HANDLE
+
+        // The city has nothing to do with alarms: both editions keep it (EclipseTracker 2.1.0).
+        is BridgeMessage.GetCity, is BridgeMessage.SetCity -> Action.HANDLE
     }
 
     /** The id of the request a refusal answers, if it had one. */

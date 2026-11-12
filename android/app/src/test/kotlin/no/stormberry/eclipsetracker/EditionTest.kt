@@ -35,12 +35,12 @@ class EditionTest {
         val gradle = repo("android/app/build.gradle.kts")
         val code = Regex("""\n        versionCode = (\d+)\n""").find(gradle)!!.groupValues[1].toInt()
         val name = Regex("""\n        versionName = "([^"]+)"\n""").find(gradle)!!.groupValues[1]
-        assertEquals(20001, code)
-        assertEquals("2.0.1", name)
+        assertEquals(20100, code)
+        assertEquals("2.1.0", name)
         assertTrue(gradle.contains("val PLAY_VERSION_CODE_OFFSET = 1_000_000\n"))
         assertTrue(gradle.contains("versionCode = PLAY_VERSION_CODE_OFFSET + versionCode!!"))
-        // 1,000,000 + 20001: never the code of a sovereign release (at most 999999 in its scheme).
-        assertEquals(1020001, 1_000_000 + code)
+        // 1,000,000 + 20100: never the code of a sovereign release (at most 999999 in its scheme).
+        assertEquals(1020100, 1_000_000 + code)
         assertTrue(gradle.contains("applicationId = if (playBuild) \"no.stormberry.eclipsetracker.play\" else \"no.stormberry.eclipsetracker\""))
         assertTrue(gradle.contains("base { archivesName = \"eclipsetracker-play\" }"))
     }

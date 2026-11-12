@@ -1,0 +1,220 @@
+{
+ "about": "Which texts are a kept city (EclipseTracker 2.1.0). The page's parseStoredCity(text, { anyZone: true }) and the app's KeptCity must both give valid for every case; tools/vectors/build-vectors.py checks the list against its own reading. The zone is only checked as text of 1 to 200 characters: the page checks it with the WebView's own zone list. The app also refuses a text over 1,024 characters (KeptCityTest), which the page's rule does not.",
+ "cases": [
+  {
+   "name": "the text the page writes",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": true
+  },
+  {
+   "name": "an unusual zone name is kept as text; the page checks it with the WebView's zone list",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Mars/Olympus\"}",
+   "valid": true
+  },
+  {
+   "name": "the edges: latitude -90, longitude 180, a name of 200 characters",
+   "text": "{\"v\":1,\"name\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"country\":\"Norway\",\"lat\":-90,\"lon\":180,\"tz\":\"Europe/Oslo\"}",
+   "valid": true
+  },
+  {
+   "name": "whole numbers for latitude and longitude",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60,\"lon\":5,\"tz\":\"Europe/Oslo\"}",
+   "valid": true
+  },
+  {
+   "name": "a number written 60.0 is read as 60",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.0,\"lon\":5.0,\"tz\":\"Europe/Oslo\"}",
+   "valid": true
+  },
+  {
+   "name": "version 1 written as 1.0 is version 1",
+   "text": "{\"v\":1.0,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": true
+  },
+  {
+   "name": "a name with an accent and a name with a character outside the basic plane",
+   "text": "{\"v\":1,\"name\":\"Tromsø 🌍\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": true
+  },
+  {
+   "name": "an escaped quote in the name",
+   "text": "{\"v\":1,\"name\":\"Say \\\"hi\\\"\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": true
+  },
+  {
+   "name": "a zone name of 200 characters",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ\"}",
+   "valid": true
+  },
+  {
+   "name": "an extra key",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\",\"extra\":1}",
+   "valid": false
+  },
+  {
+   "name": "a missing key",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242}",
+   "valid": false
+  },
+  {
+   "name": "no version",
+   "text": "{\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "version 2",
+   "text": "{\"v\":2,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "version as text",
+   "text": "{\"v\":\"1\",\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "version true",
+   "text": "{\"v\":true,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "not JSON",
+   "text": "{\"name\":",
+   "valid": false
+  },
+  {
+   "name": "an array",
+   "text": "[]",
+   "valid": false
+  },
+  {
+   "name": "a string",
+   "text": "\"Bergen\"",
+   "valid": false
+  },
+  {
+   "name": "null text",
+   "text": "null",
+   "valid": false
+  },
+  {
+   "name": "a number",
+   "text": "1",
+   "valid": false
+  },
+  {
+   "name": "an empty text",
+   "text": "",
+   "valid": false
+  },
+  {
+   "name": "latitude 91",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":91,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "latitude -90.5",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":-90.5,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "longitude 180.1",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":180.1,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "longitude -181",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":-181,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "longitude as text",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":\"5.3\",\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "latitude null",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":null,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "latitude true",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":true,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "longitude 1e999 (not finite)",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":1e999,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "zone not text",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":1}",
+   "valid": false
+  },
+  {
+   "name": "an empty zone",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"\"}",
+   "valid": false
+  },
+  {
+   "name": "a zone of 201 characters",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ\"}",
+   "valid": false
+  },
+  {
+   "name": "a name of 201 characters",
+   "text": "{\"v\":1,\"name\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "an empty name",
+   "text": "{\"v\":1,\"name\":\"\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "an empty country",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "name not text",
+   "text": "{\"v\":1,\"name\":5,\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "a line break in the name",
+   "text": "{\"v\":1,\"name\":\"Ber\\ngen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "a tab in the country",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Nor\\tway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "a NUL in the name",
+   "text": "{\"v\":1,\"name\":\"Ber\\u0000gen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "a DEL in the country",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "a C1 control in the name",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/Oslo\"}",
+   "valid": false
+  },
+  {
+   "name": "a control character in the zone is only text here (the page then finds no such zone and cannot use the city)",
+   "text": "{\"v\":1,\"name\":\"Bergen\",\"country\":\"Norway\",\"lat\":60.393,\"lon\":5.3242,\"tz\":\"Europe/\\u0001Oslo\"}",
+   "valid": true
+  },
+  {
+   "name": "an unpaired surrogate escape is still text of one unit",
+   "text": "{\"v\":1,\"name\":\"B\\ud800\",\"country\":\"Norway\",\"lat\":1,\"lon\":1,\"tz\":\"Europe/Oslo\"}",
+   "valid": true
+  }
+ ]
+}

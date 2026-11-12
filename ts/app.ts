@@ -31,7 +31,7 @@
 // page is as it was. In the Android app the chooser stays hidden until the app's bridge says it can
 // keep a city (AppHost.cities, ts/app-host.d.ts).
 
-import { DEFAULT_SPEC, MAX_ALARMS, defaultSpecAt, RECORD_GRACE_MS, choiceOf, isValidRecordSet, nextNewSpec, planAlarm, planAlarmsAt, recordsFromRows, ringing, rowsFromRecords, specForChoice } from './core/alarms.js';
+import { DEFAULT_SPEC, MAX_ALARMS, MAX_START_OFFSET_MS, defaultSpecAt, RECORD_GRACE_MS, choiceOf, isPlace, isValidRecordSet, nextNewSpec, planAlarm, planAlarmsAt, planRecord, plannerFrame, recordsFromRows, ringing, rowsFromRecords, specForChoice } from './core/alarms.js';
 import { parseStoredCity, searchCities, storedCityText } from './core/citysearch.js';
 import type { City, StoredCity } from './core/citysearch.js';
 import { ECLIPSES, eclipseById, groupByYear, matches, nextEclipse, typesFor, upcoming } from './core/eclipses.js';
@@ -40,6 +40,7 @@ import { BEFORE_CHOICES, DAY_CHOICES, alarmWords, countdownParts, countdownWords
 import { buildIcs } from './core/ics.js';
 import { localAll } from './core/local.js';
 import type { Local } from './core/local.js';
+import type { PlannerFrame } from './core/alarms.js';
 import type { AlarmSpec, Eclipse, EclipseKind, EclipseType, MinutesBefore, PlannedAlarm, PlannerRow } from './core/types.js';
 import type { AppHost, AppPage } from './app-host.js';
 import { deviceZone, isKnownZone, isWallTime, localDateTime, offsetMinutes } from './core/zoned.js';
@@ -68,6 +69,21 @@ function zoneNow(): string {
 function anchorOf(e: Eclipse): number {
   const l = city ? locals.get(e.id) : undefined;
   return l ? minuteOf(l.start) : greatestMinute(e);
+}
+
+/**
+ * Where the planner counts from for an eclipse (plan Q4, Marcos, 2026-11-12): with a chosen city
+ * that sees it, the start there in the city's zone; else greatest eclipse in the device's zone, as
+ * with no city. The overview's Change can open an eclipse the city cannot see (an alarm set with no
+ * city or for another city): its alarms then stay version 1 records and the planner says so.
+ */
+function frameOf(e: Eclipse): PlannerFrame {
+  return plannerFrame(e, city ? locals.get(e.id)?.start : undefined, cityZone, ZONE);
+}
+
+/** The chosen city when the planner's eclipse is seen from it, else none. */
+function plannerCity(): StoredCity | undefined {
+  return planning && frameOf(planning).local ? city : undefined;
 }
 
 /** The eclipses the countdown and the list work with: all of them, or those seen from the city. */
@@ -345,8 +361,8 @@ function say(text: string): void {
 
 function plannerHeader(e: Eclipse): void {
   setText($('planner-title'), `Alarms for the ${eclipseName(e).toLowerCase()}`);
-  const t = anchorOf(e);
-  if (city) {
+  const { anchor: t, local } = frameOf(e);
+  if (city && local) {
     // With a city the alarms count from the minute the eclipse starts there, in the city's zone,
     // wherever the person is: they ring at fixed moments (spec 9.9 does not apply).
     setText($('planner-when'), `Starts in ${city.name}: ${localWhen(cityZone, t)}, which is ${localDateTime('UTC', t).time} UTC.`);
@@ -368,8 +384,9 @@ function plannerHeader(e: Eclipse): void {
 function openPlanner(e: Eclipse, from: HTMLElement, start: readonly PlannerRow[] = []): void {
   planning = e;
   opener = from;
-  // With a city the default depends on the local start: before 12:00 there, "the day before at 12:00" (Marcos, 2026-11-11).
-  const initial = start.length > 0 ? start.slice(0, MAX_ALARMS) : [{ spec: city ? defaultSpecAt(anchorOf(e), cityZone) : DEFAULT_SPEC }];
+  // With a city that sees the eclipse the default depends on the local start: before 12:00 there, "the day before at 12:00" (Marcos, 2026-11-11).
+  const frame = frameOf(e);
+  const initial = start.length > 0 ? start.slice(0, MAX_ALARMS) : [{ spec: frame.local ? defaultSpecAt(frame.anchor, frame.zone) : DEFAULT_SPEC }];
   rows = initial.map((r) => ({ ...(r.id ? { id: r.id } : {}), spec: r.spec, timeText: r.spec.kind === 'day' ? r.spec.time : lastTime }));
   plannerHeader(e);
   $('planner-status').textContent = '';
@@ -397,7 +414,7 @@ function resultWords(p: PlannedAlarm, planned: Array<PlannedAlarm | null>): stri
   }
   let words = `Rings ${longDate(p.localDate)} at ${p.localTime} (${offsetWords(p.offsetMinutes)})`;
   // An alarm after greatest eclipse is a positive trigger, which some calendars drop (data review D-3).
-  const after = city
+  const after = plannerCity()
     ? ', after the eclipse starts. Some calendars leave out an alarm set for after the eclipse begins.'
     : ', after greatest eclipse. Some calendars leave out an alarm set for after the eclipse begins.';
   words += p.afterGreatest ? after : '.';
@@ -412,7 +429,8 @@ function planRows(now: number): Array<PlannedAlarm | null> {
   if (!planning) return [];
   const specs = rowSpecs();
   const complete = specs.filter((s): s is AlarmSpec => s !== null);
-  const planned = planAlarmsAt(anchorOf(planning), complete, zoneNow(), now);
+  const frame = frameOf(planning);
+  const planned = planAlarmsAt(frame.anchor, complete, frame.zone, now);
   let k = 0;
   return specs.map((s) => (s === null ? null : planned[k++] ?? null));
 }
@@ -453,7 +471,8 @@ function renderRows(focusIndex = -1): void {
     const choiceLabel = el('label', { class: 'field' });
     choiceLabel.append(el('span', { class: 'field-label' }, 'When'));
     const choice = el('select', { class: 'alarm-choice', 'aria-describedby': resultId });
-    for (const c of DAY_CHOICES) choice.append(el('option', { value: c.value }, city && c.value === 'before' ? 'Before the eclipse starts' : c.label));
+    const seen = plannerCity() !== undefined;
+    for (const c of DAY_CHOICES) choice.append(el('option', { value: c.value }, seen && c.value === 'before' ? 'Before the eclipse starts' : c.label));
     choice.value = choiceOf(row.spec);
     choiceLabel.append(choice);
     fs.append(choiceLabel);
@@ -565,9 +584,10 @@ function randomHex(bytes: number): string {
  */
 function checkedPlan(now: number, kept = false): { eclipse: Eclipse; planned: PlannedAlarm[] } | undefined {
   if (!planning) return undefined;
-  const g = anchorOf(planning);
+  const g = frameOf(planning).anchor;
+  const seenFrom = plannerCity();
   if (g <= now && !(kept && now < g + RECORD_GRACE_MS)) {
-    say(city ? `This eclipse has already started in ${city.name}, so there is nothing to save.` : 'This eclipse has passed, so there is nothing to save.');
+    say(seenFrom ? `This eclipse has already started in ${seenFrom.name}, so there is nothing to save.` : 'This eclipse has passed, so there is nothing to save.');
     return undefined;
   }
   const planned = planRows(now);
@@ -978,7 +998,7 @@ function openFor(e: Eclipse, from: HTMLElement): void {
 
 function appPage(): AppPage {
   return {
-    core: { eclipseById, eclipseName, alarmWords, localWhen, planAlarm, recordsFromRows, rowsFromRecords, isValidRecordSet, greatestMinute, upcoming },
+    core: { eclipseById, eclipseName, alarmWords, localWhen, planAlarm, planRecord, recordsFromRows, rowsFromRecords, isValidRecordSet, greatestMinute, upcoming },
     zone: () => ZONE,
     // Fix B, A-9: Change works while the app keeps the eclipse's records, also after greatest
     // eclipse (an alarm at noon on the day of a lunar eclipse at 00:13 is kept until it rings).
@@ -990,6 +1010,16 @@ function appPage(): AppPage {
     ringingRows: () => {
       const plan = checkedPlan(Date.now(), true);
       if (!plan) return undefined;
+      // With a city that sees the eclipse the alarms count from the minute it starts there, in the
+      // city's zone (version 2 records, EclipseTracker 2.1.0); the app checks the start against
+      // greatest eclipse again. An eclipse the city cannot see keeps version 1 records (plan Q4).
+      const frame = frameOf(plan.eclipse);
+      const seenFrom = frame.local ? city : undefined;
+      const place = seenFrom ? `${seenFrom.name}, ${seenFrom.country}` : undefined;
+      if (place !== undefined && (!isPlace(place) || Math.abs(frame.anchor - greatestMinute(plan.eclipse)) > MAX_START_OFFSET_MS)) {
+        say('The ringing alarms could not be set. Try again.');
+        return undefined;
+      }
       return {
         eclipse: plan.eclipse,
         count: rows.length,
@@ -997,6 +1027,7 @@ function appPage(): AppPage {
           const id = rows[index]?.id;
           return p.status === 'ok' ? [{ index, ...(id ? { id } : {}), spec: p.spec }] : [];
         }),
+        ...(place !== undefined ? { local: { start: frame.anchor, zone: frame.zone, place } } : {}),
       };
     },
     setRowIds: (ids) => {

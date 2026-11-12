@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """The test vectors stage B's Kotlin port must pass, checked against an independent oracle.
 
-    python3 -I tools/vectors/build-vectors.py           write tests/record-vectors.json and
-                                                        tests/dst-vectors.json
+    python3 -I tools/vectors/build-vectors.py           write tests/record-vectors.json,
+                                                        tests/dst-vectors.json,
+                                                        tests/city-record-vectors.json and
+                                                        tests/stored-city-vectors.json
     python3 -I tools/vectors/build-vectors.py --check   change nothing; exit 1 if either file is not
                                                         what this script makes, or if any case of
                                                         tests/alarm-vectors.json disagrees with the
@@ -22,6 +24,18 @@ same files, so the app, the oracle and the Kotlin port all agree on one set of a
     becomes. Generated from the zones' rules; Africa/Casablanca is left out on purpose, because the
     tz database releases disagree about Morocco's future changes (data review D-8).
 
+  * tests/city-record-vectors.json (EclipseTracker 2.1.0, 12 November 2026): the version 2 alarm
+    record, an alarm set while a city is chosen, which counts from the minute the eclipse starts at
+    the city in the city's zone, wherever the phone is. For 16 cities (tests/local-vectors.json), the
+    first 10 eclipses seen from each after 2026-11-12 and 9 alarm options (plus an edge wall time
+    per eclipse and hand-picked clock-change days): the instant it rings, what a re-plan does at
+    three moments, the words, and the default alarm the planner offers. Also the validity of
+    version 2 records. The TypeScript (tests/alarms.test.ts) and the Kotlin
+    (core/CityAnchorTest) replay the same file.
+  * tests/stored-city-vectors.json (same date): which texts are a kept city (the page's
+    parseStoredCity with anyZone, and the app's KeptCity); the independent check here is
+    stored_city_valid().
+
 Instants are written YYYY-MM-DDTHH:MM:SSZ everywhere (code review C-23). Standard library only;
 adapted from the data reviewer's gen_inputs.py and harness.mjs (review-data/, 2026-10-16).
 """
@@ -29,6 +43,7 @@ adapted from the data reviewer's gen_inputs.py and harness.mjs (review-data/, 20
 import datetime as dt
 import json
 import pathlib
+import re
 import sys
 from zoneinfo import ZoneInfo
 
@@ -193,6 +208,318 @@ def record_vectors() -> dict:
     }
 
 
+# ---- City record vectors (version 2 records, EclipseTracker 2.1.0) ----------------------------
+
+MAX_START_OFFSET = dt.timedelta(hours=6)   # core MAX_START_OFFSET_MS
+BEFORE_WORDS = {15: "15 minutes", 30: "30 minutes", 60: "1 hour", 120: "2 hours"}
+DAY_WORDS = {0: "On the day of the eclipse", 1: "1 day before", 2: "2 days before", 3: "3 days before", 7: "1 week before"}
+PHONE_ZONES = ["Europe/Oslo", "Asia/Tokyo", "America/New_York", "Pacific/Kiritimati", "Australia/Sydney", "UTC"]
+
+
+def plan_at(anchor: dt.datetime, spec: dict, zone: str, now: dt.datetime) -> dict:
+    """plan() counting from an anchor minute (the start at a city) instead of greatest eclipse."""
+    tz = ZoneInfo(zone)
+    if spec["kind"] == "before":
+        fire, how = anchor - dt.timedelta(minutes=spec["minutes"]), "none"
+    else:
+        day = anchor.astimezone(tz).date() - dt.timedelta(days=spec["daysBefore"])
+        fire, how = wall_to_instant(zone, day, spec["time"])
+    local = fire.astimezone(tz)
+    return {
+        "fireAt": iso(fire), "localDate": local.strftime("%Y-%m-%d"), "localTime": local.strftime("%H:%M"),
+        "offsetMinutes": int(local.utcoffset().total_seconds() // 60), "status": "ok" if fire > now else "past",
+        "afterAnchor": fire > anchor, "dst": how,
+    }
+
+
+def alarm_words(spec: dict, place) -> str:
+    if spec["kind"] == "before":
+        return f"{BEFORE_WORDS[spec['minutes']]} before greatest eclipse" if place is None else f"{BEFORE_WORDS[spec['minutes']]} before the eclipse starts in {place}"
+    words = f"{DAY_WORDS[spec['daysBefore']]} at {spec['time']}"
+    return words if place is None else f"{words} in {place}"
+
+
+def default_spec_at(anchor: dt.datetime, zone: str) -> dict:
+    """The alarm a new planner starts with at a city (Marcos, 2026-11-11): noon the day before when the eclipse starts before 12:00 there."""
+    local = anchor.astimezone(ZoneInfo(zone))
+    before_noon = (local.hour, local.minute) < (12, 0)
+    return {"kind": "day", "daysBefore": 1 if before_noon else 0, "time": "12:00"}
+
+
+def utf16_len(text: str) -> int:
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
+
+
+BAD_CONTROL = re.compile("[\u0000-\u001f\u007f-\u009f]")
+
+
+def valid_place(p) -> bool:
+    return isinstance(p, str) and 1 <= utf16_len(p) <= 200 and BAD_CONTROL.search(p) is None
+
+
+def valid_zone_name(z) -> bool:
+    """An IANA region name, never a fixed offset: capitals at the start of each segment, and a zone the tz database knows."""
+    if not isinstance(z, str) or len(z) > 200 or re.fullmatch(r"[A-Z][A-Za-z0-9_+-]*(/[A-Z][A-Za-z0-9_+-]*)*", z) is None:
+        return False
+    try:
+        ZoneInfo(z)
+        return True
+    except Exception:
+        return False
+
+
+def valid_start(s) -> bool:
+    if not isinstance(s, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z", s) is None:
+        return False
+    try:
+        parse(s)
+        return True
+    except ValueError:
+        return False
+
+
+def valid_record_any(r) -> bool:
+    """valid_record() for version 1; version 2 has exactly v, id, eclipseId, spec, start, zone, place."""
+    if isinstance(r, dict) and r.get("v") == 2 and not isinstance(r.get("v"), bool):
+        if sorted(r) != ["eclipseId", "id", "place", "spec", "start", "v", "zone"]:
+            return False
+        v1 = {"v": 1, "id": r["id"], "eclipseId": r["eclipseId"], "spec": r["spec"]}
+        return valid_record(v1) and valid_start(r["start"]) and valid_zone_name(r["zone"]) and valid_place(r["place"])
+    return valid_record(r)
+
+
+def fate_any(case: dict) -> dict:
+    r, e, zone, now = case["record"], case["eclipse"], case["zone"], parse(case["now"])
+    if not valid_record_any(r):
+        return {"action": "delete", "reason": "invalid"}
+    if e is None or e["id"] != r["eclipseId"]:
+        return {"action": "delete", "reason": "unknown-eclipse"}
+    g = round_minute(parse(e["greatest"]))
+    if now >= g + GRACE:
+        return {"action": "delete", "reason": "expired"}
+    if r["v"] == 2:
+        if abs(parse(r["start"]) - g) > MAX_START_OFFSET:
+            return {"action": "delete", "reason": "invalid"}
+        p = plan_at(parse(r["start"]), r["spec"], r["zone"], now)
+    else:
+        p = plan(e["greatest"], r["spec"], zone, now)
+    return {"action": "arm", "fireAt": p["fireAt"]} if parse(p["fireAt"]) > now else {"action": "delete", "reason": "passed"}
+
+
+def v2(eclipse_id: str, spec: dict, start: str, zone: str, place: str, rid: str = ID) -> dict:
+    return {"v": 2, "id": rid, "eclipseId": eclipse_id, "spec": spec, "start": start, "zone": zone, "place": place}
+
+
+# Hand-picked version 2 cases: clock-change days in the city's zone, phone elsewhere.
+# Not real eclipses: dates chosen so the city's local day is a day the clocks change.
+SYDNEY_FALL = {"id": "2028-04-02-solar", "greatest": "2028-04-02T03:00:00Z"}       # the clocks go back in Sydney on Sunday 2 April 2028 at 03:00 (to 02:00)
+BERGEN_FALL = {"id": "2033-10-29-lunar", "greatest": "2033-10-29T22:30:00Z"}       # AUTUMN above, as seen from Bergen: 00:30 on Sunday 30 October, the day the clocks go back
+
+
+def hand_cases() -> list[dict]:
+    out = []
+
+    def add(name, eclipse, record, phone, now):
+        c = {"name": name, "record": record, "eclipse": eclipse, "zone": phone, "now": now}
+        c["want"] = fate_any(c)
+        out.append(c)
+
+    # Sydney sees the start at 2028-04-01 10:00 UTC = 21:00 AEDT; the clocks go back at 03:00 on Sunday 2 April 2028 (to 02:00).
+    add("Sydney: on the day at 02:30 on the night the clocks go back (02:30 happens twice, the first is used); the phone is in Oslo",
+        SYDNEY_FALL, v2(SYDNEY_FALL["id"], {"kind": "day", "daysBefore": 0, "time": "02:30"}, "2028-04-02T01:30:00Z", "Australia/Sydney", "Sydney, Australia"), "Europe/Oslo", "2028-03-30T00:00:00Z")
+    add("Sydney: the same record while the phone is in Tokyo gives the same instant",
+        SYDNEY_FALL, v2(SYDNEY_FALL["id"], {"kind": "day", "daysBefore": 0, "time": "02:30"}, "2028-04-02T01:30:00Z", "Australia/Sydney", "Sydney, Australia"), "Asia/Tokyo", "2028-03-30T00:00:00Z")
+    add("Bergen: on the day at 02:30 on the night the clocks go back (the last Sunday of October; the start is 00:15 that Sunday); the phone is in New York",
+        BERGEN_FALL, v2(BERGEN_FALL["id"], {"kind": "day", "daysBefore": 0, "time": "02:30"}, "2033-10-29T22:15:00Z", "Europe/Oslo", "Bergen, Norway"), "America/New_York", "2033-10-28T00:00:00Z")
+    add("Bergen: 1 day before at 02:30 is the Saturday before the clocks go back, an ordinary time",
+        BERGEN_FALL, v2(BERGEN_FALL["id"], {"kind": "day", "daysBefore": 1, "time": "02:30"}, "2033-10-29T22:15:00Z", "Europe/Oslo", "Bergen, Norway"), "Europe/Oslo", "2033-10-27T00:00:00Z")
+    add("Sydney: a spring day, 02:30 does not exist when the clocks go forward on the first Sunday of October 2027 (02:00 to 03:00 AEST to AEDT), so it rings at 03:30",
+        {"id": "2027-10-03-solar", "greatest": "2027-10-03T05:00:00Z"}, v2("2027-10-03-solar", {"kind": "day", "daysBefore": 0, "time": "02:30"}, "2027-10-03T04:00:00Z", "Australia/Sydney", "Sydney, Australia"), "Europe/Oslo", "2027-10-01T00:00:00Z")
+    add("a start 6 hours after greatest eclipse is the farthest a record may be: armed",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T22:00:00Z", "Europe/Oslo", "Bergen, Norway"), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("a start 6 hours and 1 minute from greatest eclipse cannot come from the page: invalid",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T22:01:00Z", "Europe/Oslo", "Bergen, Norway"), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("a start 6 hours and 1 minute before greatest eclipse: invalid",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T09:58:00Z", "Europe/Oslo", "Bergen, Norway"), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("a start with seconds is invalid",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T15:00:30Z", "Europe/Oslo", "Bergen, Norway"), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("a start of 24:00 is not an instant: invalid",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T24:00:00Z", "Europe/Oslo", "Bergen, Norway"), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("a fixed offset is not a zone: invalid",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T15:00:00Z", "+01:00", "Bergen, Norway"), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("an unknown zone is invalid",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T15:00:00Z", "Mars/Olympus", "Bergen, Norway"), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("an empty place is invalid",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T15:00:00Z", "Europe/Oslo", ""), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("a version 2 record with a version 1 key set (no start) is invalid",
+        SOLAR, {"v": 2, "id": ID, "eclipseId": SOLAR["id"], "spec": {"kind": "before", "minutes": 30}}, "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("a version 1 record with the version 2 keys is invalid",
+        SOLAR, {**v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T15:00:00Z", "Europe/Oslo", "Bergen, Norway"), "v": 1}, "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("version 3 is invalid",
+        SOLAR, {**v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T15:00:00Z", "Europe/Oslo", "Bergen, Norway"), "v": 3}, "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("a place with a line break is invalid",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T15:00:00Z", "Europe/Oslo", "Ber\ngen"), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("a place of 200 characters is valid",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T15:00:00Z", "Europe/Oslo", "x" * 200), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("a place of 201 characters is invalid",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T15:00:00Z", "Europe/Oslo", "x" * 201), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("a place with a character outside the basic plane counts two (an emoji is 2 of the 200)",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T15:00:00Z", "Europe/Oslo", "x" * 199 + "\U0001F30D"), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("UTC is a region name and is valid",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T15:00:00Z", "UTC", "Greenwich, United Kingdom"), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("a lower-case zone name is invalid (java.time reads names exactly)",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 30}, "2027-02-06T15:00:00Z", "europe/oslo", "Bergen, Norway"), "Europe/Oslo", "2027-02-01T00:00:00Z")
+    add("48 hours after greatest eclipse a version 2 record is expired, whatever its start",
+        SOLAR, v2(SOLAR["id"], {"kind": "before", "minutes": 15}, "2027-02-06T16:30:00Z", "Europe/Oslo", "Bergen, Norway"), "Europe/Oslo", "2027-02-08T16:00:00Z")
+    return out
+
+
+def city_vectors() -> dict:
+    local = json.loads((TESTS / "local-vectors.json").read_text(encoding="utf-8"))
+    eclipses = {e["id"]: e for e in json.loads((ROOT / "data" / "eclipses.json").read_text(encoding="utf-8"))["eclipses"]}
+    now0 = parse("2026-11-12T00:00:00Z")
+    after = "2026-11-12T00:00:00Z"
+    specs = ([{"kind": "day", "daysBefore": d, "time": "12:00"} for d in (0, 1, 2, 3, 7)]
+             + [{"kind": "before", "minutes": m} for m in (15, 30, 60, 120)])
+    edge_times = ["00:00", "23:59", "02:30", "03:30", "00:30", "01:59"]
+    cases, defaults, k, widest = [], [], 0, dt.timedelta(0)
+    for city in local["cities"]:
+        place = f"{city['name']}, {city['country']}"
+        seen = [s for s in city["seen"] if s["start"] > after][:10]
+        assert len(seen) == 10, city["name"]
+        for j, s in enumerate(seen):
+            e = eclipses[s["id"]]
+            start = round_minute(parse(s["start"]))
+            widest = max(widest, abs(start - round_minute(parse(e["greatest"]))))
+            day = [{"kind": "day", "daysBefore": d, "time": edge_times[(k + j) % len(edge_times)]} for d in (((k + j) % 2) * 2 + 1,)]
+            for spec in specs + day:
+                phone = PHONE_ZONES[k % len(PHONE_ZONES)]
+                k += 1
+                record = v2(e["id"], spec, iso(start), city["tz"], place)
+                p = plan_at(start, spec, city["tz"], now0)
+                case = {
+                    "city": place, "phone": phone, "eclipse": {"id": e["id"], "greatest": e["greatest"]}, "start": iso(start), "zone": city["tz"],
+                    "spec": spec, "record": record,
+                    "plan": {kk: p[kk] for kk in ("fireAt", "localDate", "localTime", "offsetMinutes", "afterAnchor", "dst")},
+                    "words": alarm_words(spec, place),
+                }
+                fire = parse(p["fireAt"])
+                moments = {"before": fire - dt.timedelta(hours=1), "at": fire, "after": fire + dt.timedelta(hours=1)}
+                case["fates"] = {}
+                for name, t in moments.items():
+                    c = {"record": record, "eclipse": case["eclipse"], "zone": phone, "now": iso(t)}
+                    case["fates"][name] = {"now": iso(t), "want": fate_any(c)}
+                cases.append(case)
+            d = default_spec_at(start, city["tz"])
+            ring = plan_at(start, d, city["tz"], now0)
+            assert ring["localTime"] == "12:00" and parse(ring["fireAt"]) <= start, (city["name"], s["id"])
+            defaults.append({"city": place, "zone": city["tz"], "start": iso(start), "want": d, "ringsAt": ring["fireAt"], "ringsAtStart": parse(ring["fireAt"]) == start})
+    assert widest <= dt.timedelta(hours=3, minutes=7), widest   # measured: 3.1 hours
+    return {
+        "about": ("Version 2 alarm records (EclipseTracker 2.1.0): an alarm set while a city is chosen counts from the minute the eclipse starts "
+                  "at the city, in the city's zone, wherever the phone is. Made by tools/vectors/build-vectors.py with Python's zoneinfo as the "
+                  "oracle. cases: for 16 cities, the first 10 eclipses seen after 2026-11-12 and 9 alarm options plus one edge wall time each. "
+                  "plan is when it rings (the same for every phone zone) and fates is what a re-plan does one hour before, at, and one hour after "
+                  "that instant, with the phone in the zone given. hand: clock-change days and records that must be refused. defaults: the alarm a "
+                  "new planner starts with, and the instant it rings. widestStartOffsetMinutes is the largest distance of a start from greatest "
+                  "eclipse in these cases. Instants are UTC, YYYY-MM-DDTHH:MM:SSZ."),
+        "maxStartOffsetHours": 6,
+        "widestStartOffsetMinutes": int(widest.total_seconds() // 60),
+        "cases": cases,
+        "hand": hand_cases(),
+        "defaults": defaults,
+    }
+
+
+# ---- Stored city vectors (the kept city text) -----------------------------------------------
+
+GOOD_CITY = {"v": 1, "name": "Bergen", "country": "Norway", "lat": 60.393, "lon": 5.3242, "tz": "Europe/Oslo"}
+
+
+def stored_city_valid(text) -> bool:
+    """The independent check: the page's parseStoredCity with anyZone, as the app's KeptCity reads it."""
+    if not isinstance(text, str):
+        return False
+    try:
+        o = json.loads(text, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(c)))
+    except ValueError:
+        return False
+    if not isinstance(o, dict) or sorted(o) != sorted(GOOD_CITY):
+        return False
+
+    def number(x, limit):
+        return isinstance(x, (int, float)) and not isinstance(x, bool) and abs(x) <= limit and x == x
+
+    return (o["v"] == 1 and not isinstance(o["v"], bool)
+            and valid_place(o["name"]) and valid_place(o["country"]) and number(o["lat"], 90) and number(o["lon"], 180)
+            and isinstance(o["tz"], str) and 1 <= utf16_len(o["tz"]) <= 200)
+
+
+def stored_city_vectors() -> dict:
+    def j(**kw) -> str:
+        return json.dumps({**GOOD_CITY, **kw}, ensure_ascii=False, separators=(",", ":"))
+
+    def without(key) -> str:
+        return json.dumps({k: v for k, v in GOOD_CITY.items() if k != key}, separators=(",", ":"))
+
+    cases = [
+        ("the text the page writes", j(), True),
+        ("an unusual zone name is kept as text; the page checks it with the WebView's zone list", j(tz="Mars/Olympus"), True),
+        ("the edges: latitude -90, longitude 180, a name of 200 characters", j(lat=-90, lon=180, name="x" * 200), True),
+        ("whole numbers for latitude and longitude", j(lat=60, lon=5), True),
+        ("a number written 60.0 is read as 60", '{"v":1,"name":"Bergen","country":"Norway","lat":60.0,"lon":5.0,"tz":"Europe/Oslo"}', True),
+        ("version 1 written as 1.0 is version 1", '{"v":1.0,"name":"Bergen","country":"Norway","lat":60.393,"lon":5.3242,"tz":"Europe/Oslo"}', True),
+        ("a name with an accent and a name with a character outside the basic plane", j(name="Tromsø \U0001F30D"), True),
+        ("an escaped quote in the name", j(name='Say "hi"'), True),
+        ("a zone name of 200 characters", j(tz="Z" * 200), True),
+        ("an extra key", j(extra=1), False),
+        ("a missing key", without("tz"), False),
+        ("no version", json.dumps({k: v for k, v in GOOD_CITY.items() if k != "v"}, separators=(",", ":")), False),
+        ("version 2", j(v=2), False),
+        ("version as text", j(v="1"), False),
+        ("version true", j(v=True), False),
+        ("not JSON", '{"name":', False),
+        ("an array", "[]", False),
+        ("a string", '"Bergen"', False),
+        ("null text", "null", False),
+        ("a number", "1", False),
+        ("an empty text", "", False),
+        ("latitude 91", j(lat=91), False),
+        ("latitude -90.5", j(lat=-90.5), False),
+        ("longitude 180.1", j(lon=180.1), False),
+        ("longitude -181", j(lon=-181), False),
+        ("longitude as text", j(lon="5.3"), False),
+        ("latitude null", j(lat=None), False),
+        ("latitude true", j(lat=True), False),
+        ("longitude 1e999 (not finite)", '{"v":1,"name":"Bergen","country":"Norway","lat":60.393,"lon":1e999,"tz":"Europe/Oslo"}', False),
+        ("zone not text", j(tz=1), False),
+        ("an empty zone", j(tz=""), False),
+        ("a zone of 201 characters", j(tz="Z" * 201), False),
+        ("a name of 201 characters", j(name="x" * 201), False),
+        ("an empty name", j(name=""), False),
+        ("an empty country", j(country=""), False),
+        ("name not text", j(name=5), False),
+        ("a line break in the name", j(name="Ber\ngen"), False),
+        ("a tab in the country", j(country="Nor\tway"), False),
+        ("a NUL in the name", j(name="Ber\u0000gen"), False),
+        ("a DEL in the country", j(country="Nor\u007fway"), False),
+        ("a C1 control in the name", j(name="Ber\u0085gen"), False),
+        ("a control character in the zone is only text here (the page then finds no such zone and cannot use the city)", j(tz="Europe/\u0001Oslo"), True),
+        ("an unpaired surrogate escape is still text of one unit", '{"v":1,"name":"B\\ud800","country":"Norway","lat":1,"lon":1,"tz":"Europe/Oslo"}', True),
+    ]
+    out = []
+    for name, text, valid in cases:
+        assert stored_city_valid(text) == valid, name
+        out.append({"name": name, "text": text, "valid": valid})
+    return {
+        "about": ("Which texts are a kept city (EclipseTracker 2.1.0). The page's parseStoredCity(text, { anyZone: true }) and the app's KeptCity "
+                  "must both give valid for every case; tools/vectors/build-vectors.py checks the list against its own reading. The zone is only "
+                  "checked as text of 1 to 200 characters: the page checks it with the WebView's own zone list. The app also refuses a text over "
+                  "1,024 characters (KeptCityTest), which the page's rule does not."),
+        "cases": out,
+    }
+
+
 # ---- Clock-change vectors -------------------------------------------------------------------
 
 def change_instants(zone: str):
@@ -274,6 +601,8 @@ def main() -> None:
     files = {
         TESTS / "record-vectors.json": json.dumps(record_vectors(), ensure_ascii=False, indent=1) + "\n",
         TESTS / "dst-vectors.json": dump(dst_vectors()),
+        TESTS / "city-record-vectors.json": json.dumps(city_vectors(), ensure_ascii=False, separators=(",", ":")).replace('"hand":', '\n"hand":').replace('"defaults":', '\n"defaults":').replace('{"city":', '\n{"city":') + "\n",
+        TESTS / "stored-city-vectors.json": json.dumps(stored_city_vectors(), ensure_ascii=False, indent=1) + "\n",
     }
     bad = False
     alarm = json.loads((TESTS / "alarm-vectors.json").read_text(encoding="utf-8"))

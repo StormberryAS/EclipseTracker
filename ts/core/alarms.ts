@@ -23,8 +23,8 @@
 // copy: the checks on records that cross the bridge or come out of storage, what a re-plan does with
 // each record (recordFate), and the planner rows built from stored records and back.
 
-import { greatestMinute } from './format.js';
-import type { AlarmRecord, AlarmSpec, DaysBefore, Eclipse, MinutesBefore, PlannedAlarm, PlannerRow, RecordFate } from './types.js';
+import { greatestMinute, minuteOf } from './format.js';
+import type { AlarmRecord, AlarmSpec, DaysBefore, Eclipse, LocalAnchor, MinutesBefore, PlannedAlarm, PlannerRow, RecordFate } from './types.js';
 import { addDays, isKnownZone, isWallTime, localDateTime, offsetMinutes, wallTimeToInstant } from './zoned.js';
 
 /** The most alarms one eclipse can have. */
@@ -48,6 +48,27 @@ export function defaultSpecAt(anchor: number, zone: string): AlarmSpec {
     : { kind: 'day', daysBefore: 0, time: DEFAULT_TIME };
 }
 
+/** Where the planner counts from: the minute, the zone, and whether the alarms are for a city. */
+export interface PlannerFrame {
+  readonly anchor: number;
+  readonly zone: string;
+  /** True when the alarms count from the start at the city (version 2 records); false: greatest eclipse (version 1). */
+  readonly local: boolean;
+}
+
+/**
+ * Where the planner counts from (plan Q4, Marcos, 2026-11-12). `start` is the eclipse's start at
+ * the chosen city, or undefined when no city is chosen or the city cannot see the eclipse. With a
+ * start: that minute in the city's zone, and the ringing alarms are version 2 records. Without
+ * one: greatest eclipse in the device's zone, exactly as with no city, so the ringing alarms stay
+ * version 1 records and ring as in 2.0.1. Page only: the app plans each record from what it holds.
+ */
+export function plannerFrame(e: Pick<Eclipse, 'greatest'>, start: number | undefined, cityZone: string, deviceZone: string): PlannerFrame {
+  return start === undefined
+    ? { anchor: greatestMinute(e), zone: deviceZone, local: false }
+    : { anchor: minuteOf(start), zone: cityZone, local: true };
+}
+
 export const DAYS_BEFORE: readonly DaysBefore[] = [0, 1, 2, 3, 7];
 export const MINUTES_BEFORE: readonly MinutesBefore[] = [15, 30, 60, 120];
 
@@ -59,9 +80,22 @@ export const MINUTES_BEFORE: readonly MinutesBefore[] = [15, 30, 60, 120];
  */
 export const RECORD_GRACE_MS = 48 * 3_600_000;
 
+/**
+ * The most a version 2 record's start may differ from greatest eclipse (EclipseTracker 2.1.0). The
+ * start at a city is never more than 3.1 hours from it (the largest of the 2,137 city cases in
+ * tests/local-vectors.json); 6 hours leaves a clear margin. Android cannot work out a local start
+ * itself, so this bound is the check it has: a record outside it cannot come from the page.
+ */
+export const MAX_START_OFFSET_MS = 6 * 3_600_000;
+
 const MINUTE = 60_000;
 const RECORD_ID = /^[0-9a-f]{32}$/;
 const ECLIPSE_ID = /^\d{4}-\d{2}-\d{2}-(solar|lunar)$/;
+/** A start in the contract's one format with the seconds at 00. */
+const START_TEXT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/;
+/** An IANA region name: every segment starts with a capital letter (the tz database's names do), as java.time reads them. */
+const ZONE_TEXT = /^[A-Z][A-Za-z0-9_+-]*(\/[A-Z][A-Za-z0-9_+-]*)*$/;
+const PLACE_BAD = /[\u0000-\u001f\u007f-\u009f]/;
 
 /**
  * The instant an alarm rings, and how a clock change was resolved, before any status is decided.
@@ -152,12 +186,50 @@ export function isRecordId(id: unknown): id is string {
   return typeof id === 'string' && RECORD_ID.test(id);
 }
 
-/** True for one alarm record stage B can store (spec section 9.4): exactly v, id, eclipseId and spec. */
+/** The epoch ms of a start text, or undefined unless the text is a real instant in the contract's format with the seconds at 00. */
+function startMs(text: unknown): number | undefined {
+  if (typeof text !== 'string' || !START_TEXT.test(text)) return undefined;
+  const ms = Date.parse(text);
+  // A round trip: 24:00 and 02-30 are read by Date.parse as other instants, so only a real one comes back unchanged.
+  return Number.isNaN(ms) || new Date(ms).toISOString().replace('.000Z', 'Z') !== text ? undefined : ms;
+}
+
+/** True for a city's time zone as a version 2 record keeps it: an IANA region name this runtime knows, never a fixed offset. */
+function isRecordZone(zone: unknown): zone is string {
+  return typeof zone === 'string' && zone.length <= 200 && ZONE_TEXT.test(zone) && isKnownZone(zone);
+}
+
+/** True for a place name as a version 2 record keeps it: 1 to 200 characters, no control character. */
+export function isPlace(place: unknown): place is string {
+  return typeof place === 'string' && place.length >= 1 && place.length <= 200 && !PLACE_BAD.test(place);
+}
+
+/**
+ * True for one alarm record stage B can store (spec section 9.4): version 1 has exactly v, id,
+ * eclipseId and spec; version 2 (EclipseTracker 2.1.0) has exactly those and start, zone and place.
+ */
 export function isValidRecord(r: unknown): r is AlarmRecord {
   if (!r || typeof r !== 'object' || Array.isArray(r)) return false;
   const o = r as Record<string, unknown>;
-  return Object.keys(o).length === 4 && o.v === 1 && isRecordId(o.id) && typeof o.eclipseId === 'string'
-    && ECLIPSE_ID.test(o.eclipseId) && isValidSpec(o.spec);
+  const common = isRecordId(o.id) && typeof o.eclipseId === 'string' && ECLIPSE_ID.test(o.eclipseId) && isValidSpec(o.spec);
+  if (o.v === 1) return Object.keys(o).length === 4 && common;
+  if (o.v === 2) return Object.keys(o).length === 7 && common && startMs(o.start) !== undefined && isRecordZone(o.zone) && isPlace(o.place);
+  return false;
+}
+
+/** The minute a record counts from: the start at its city (version 2), else greatest eclipse. */
+export function recordAnchor(record: AlarmRecord, eclipse: Pick<Eclipse, 'greatest'>): number {
+  return record.v === 2 ? Date.parse(record.start) : greatestMinute(eclipse);
+}
+
+/** The zone a record works in: its city's (version 2, wherever the phone is), else the phone's. */
+export function recordZone(record: AlarmRecord, zone: string): string {
+  return record.v === 2 ? record.zone : zone;
+}
+
+/** One stored record planned: from its own anchor, in its own zone. */
+export function planRecord(record: AlarmRecord, eclipse: Pick<Eclipse, 'greatest'>, zone: string, now: number): PlannedAlarm {
+  return planAlarmAt(recordAnchor(record, eclipse), record.spec, recordZone(record, zone), now);
 }
 
 /**
@@ -192,7 +264,9 @@ export function recordFate(record: unknown, eclipse: Pick<Eclipse, 'id' | 'great
   if (!isValidRecord(record)) return { action: 'delete', reason: 'invalid' };
   if (!eclipse || eclipse.id !== record.eclipseId) return { action: 'delete', reason: 'unknown-eclipse' };
   if (now >= greatestMinute(eclipse) + RECORD_GRACE_MS) return { action: 'delete', reason: 'expired' };
-  const { fireAt } = planAlarm(eclipse, record.spec, zone, now);
+  // A version 2 start far from greatest eclipse cannot come from the page: invalid, after the expiry test.
+  if (record.v === 2 && Math.abs(Date.parse(record.start) - greatestMinute(eclipse)) > MAX_START_OFFSET_MS) return { action: 'delete', reason: 'invalid' };
+  const { fireAt } = planRecord(record, eclipse, zone, now);
   return fireAt > now ? { action: 'arm', fireAt } : { action: 'delete', reason: 'passed' };
 }
 
@@ -211,12 +285,17 @@ export function rowsFromRecords(records: readonly unknown[], eclipseId: string):
 /**
  * The records for one eclipse from the planner's rows (stage B's "alarms.set" message): a row
  * keeps its record id, a new row gets one from newId(). Refuses an invalid row, a repeated id and
- * more than MAX_ALARMS rows.
+ * more than MAX_ALARMS rows. With `local` (a city is chosen) every record is version 2 and counts
+ * from the start at the city; without it, version 1.
  */
-export function recordsFromRows(eclipseId: string, rows: readonly PlannerRow[], newId: () => string): AlarmRecord[] {
+export function recordsFromRows(eclipseId: string, rows: readonly PlannerRow[], newId: () => string, local?: LocalAnchor): AlarmRecord[] {
   if (!ECLIPSE_ID.test(eclipseId)) throw new RangeError(`not an eclipse id: ${eclipseId}`);
   if (rows.length > MAX_ALARMS) throw new RangeError(`at most ${MAX_ALARMS} alarms per eclipse, not ${rows.length}`);
-  const records = rows.map((row): AlarmRecord => ({ v: 1, id: row.id ?? newId(), eclipseId, spec: row.spec }));
+  const records = rows.map((row): AlarmRecord => {
+    const id = row.id ?? newId();
+    if (!local) return { v: 1, id, eclipseId, spec: row.spec };
+    return { v: 2, id, eclipseId, spec: row.spec, start: new Date(local.start).toISOString().replace('.000Z', 'Z'), zone: local.zone, place: local.place };
+  });
   if (!isValidRecordSet(records)) throw new RangeError('the rows do not make a valid set of records');
   return records;
 }

@@ -49,8 +49,12 @@ data class Snooze(val recordId: String, val eclipseId: String, val at: Long, val
         .put("v", 1).put("id", recordId).put("eclipseId", eclipseId).put("at", at).put("title", title).put("text", text)
 
     companion object {
-        /** The longest title or text kept: the longest real ones are under 40 characters. */
-        const val MAX_WORDS = 200
+        /**
+         * The longest title or text kept. A version 1 text is under 40 characters; a version 2 text
+         * names the city (up to 200 characters) and is up to 240 (EclipseTracker 2.1.0). A snooze
+         * written by 2.0.1 still parses.
+         */
+        const val MAX_WORDS = 400
 
         /** The snooze in [raw], or null unless it is exactly one this version writes. */
         fun parse(raw: Any?): Snooze? {
@@ -92,7 +96,7 @@ object FireRules {
      */
     fun decide(record: AlarmRecord?, eclipse: Eclipse?, zone: ZoneId, armedAt: Long, now: Long): FireDecision {
         if (record == null || eclipse == null || eclipse.id != record.eclipseId) return FireDecision.Gone
-        val fresh = Planner.fireInstant(eclipse.greatest, record.spec, zone).first
+        val fresh = Planner.fireInstantFor(record, eclipse, zone)
         val at = if (armedAt > 0L) armedAt else fresh
         return when {
             now < at - CLOCK_JUMP_TOLERANCE_MS -> FireDecision.Early

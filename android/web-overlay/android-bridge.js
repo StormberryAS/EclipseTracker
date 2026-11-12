@@ -51,8 +51,8 @@
         SET: 'Set ringing alarms',
         ADD: 'Add to calendar',
         TRAVEL: "Ringing alarms follow your phone's time zone: if you travel, a 12.00 alarm rings at 12.00 where you are. Alarms before greatest eclipse always follow the eclipse.",
-        KEEPS: 'EclipseTracker sends nothing; the ringing alarms you set are kept on this phone only.',
-        PLAY_KEEPS: 'EclipseTracker sends nothing; it keeps only the last file you added to your calendar, until the app next starts afresh.',
+        KEEPS: 'EclipseTracker sends nothing. It keeps only the ringing alarms you set, the city you choose, if any, and the last file you added to your calendar, which it deletes when the app next starts afresh.',
+        PLAY_KEEPS: 'EclipseTracker sends nothing. It keeps only the city you choose, if any, and the last file you added to your calendar, which it deletes when the app next starts afresh.',
         SET_ONE: '1 ringing alarm set.',
         SET_MANY: '{n} ringing alarms set.',
         SET_NONE: 'No ringing alarm is set for this eclipse.',
@@ -138,6 +138,17 @@
     const travel = PLAY ? {} : { travelNote: T.TRAVEL };
     window.EclipseTrackerApp = Object.freeze({
         ...travel,
+        cities: true,
+        loadCity: function () {
+            return ask({ type: 'city.get' }, 3000).then(function (answer) {
+                return answer && answer.type === 'city' && answer.ok === true && (typeof answer.city === 'string' || answer.city === null) ? answer.city : null;
+            });
+        },
+        saveCity: function (text) {
+            return ask({ type: 'city.set', city: text }).then(function (answer) {
+                return !!(answer && answer.type === 'city' && answer.ok === true);
+            });
+        },
         rowsFor: function (eclipseId) {
             if (PLAY)
                 return Promise.resolve([]);
@@ -155,6 +166,9 @@
         attach: function (p) {
             page = p;
             lastZone = page.zone();
+            const clearCity = document.getElementById('city-clear-btn');
+            if (clearCity instanceof HTMLButtonElement)
+                touchSize(clearCity);
             setUpPlanner();
             if (PLAY)
                 return;
@@ -206,7 +220,7 @@
             return;
         let records;
         try {
-            records = pg.core.recordsFromRows(plan.eclipse.id, plan.rows.map(function (r) { return r.id ? { id: r.id, spec: r.spec } : { spec: r.spec }; }), randomId);
+            records = pg.core.recordsFromRows(plan.eclipse.id, plan.rows.map(function (r) { return r.id ? { id: r.id, spec: r.spec } : { spec: r.spec }; }), randomId, plan.local);
         }
         catch (e) {
             pg.say(T.SET_FAILED);
@@ -321,7 +335,7 @@
             if (!e)
                 return;
             const armedAt = state.armed.get(r.id);
-            const at = armedAt !== undefined ? armedAt : core.planAlarm(e, r.spec, zone, now).fireAt;
+            const at = armedAt !== undefined ? armedAt : core.planRecord(r, e, zone, now).fireAt;
             let g = groups.get(e.id);
             if (!g) {
                 g = { e: e, alarms: [] };
@@ -346,7 +360,7 @@
             ul.style.padding = '0';
             g.alarms.sort(function (a, b) { return a.at - b.at; }).forEach(function (a) {
                 const li = el('li', 'eclipse-item');
-                const what = core.alarmWords(a.r.spec);
+                const what = core.alarmWords(a.r.spec, a.r.v === 2 ? a.r.place : undefined);
                 li.append(el('p', 'eclipse-region', what));
                 li.append(el('p', 'eclipse-when', 'Rings ' + core.localWhen(zone, a.at) + '.'));
                 const actions = el('div', 'planner-actions');

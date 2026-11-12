@@ -196,3 +196,85 @@ test('apk-without-signature: removes the APK Signing Block and moves the central
   assert.throws(() => withoutSignature(broken), /disagree/);
   assert.throws(() => withoutSignature(new Uint8Array(40)), /not a zip/);
 });
+
+// ==== The city in the app (EclipseTracker 2.1.0) =================================================
+
+test('2.1.0: the bridge offers the city filter in both editions and keeps the city in the app, never in the page', () => {
+  for (const f of [BRIDGE_TS, BRIDGE_JS]) {
+    const code = read(f).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    // The host object is built once for both editions: cities is true whatever the edition, and the two city methods ask the app.
+    assert.match(code, /cities: true/, f);
+    assert.match(code, /loadCity: function/, f);
+    assert.match(code, /saveCity: function/, f);
+    assert.match(code, /type: 'city\.get'/, f);
+    assert.match(code, /type: 'city\.set'/, f);
+    assert.doesNotMatch(code, /PLAY\s*\?[^:]*cities/, `${f}: cities does not depend on the edition`);
+    // The Clear city button is 48 px in the app.
+    assert.match(code, /getElementById\('city-clear-btn'\)/, f);
+  }
+  const bridge = read(`${KT}/web/BridgeMessage.kt`);
+  assert.match(bridge, /"city\.get" to setOf\("v", "type", "id"\)/);
+  assert.match(bridge, /"city\.set" to setOf\("v", "type", "id", "city"\)/);
+  // The WebView keeps DOM storage off; the city is in SharedPreferences, left out of backup (the root domain).
+  const main = read(`${KT}/MainActivity.kt`);
+  assert.match(main, /domStorageEnabled = false/);
+  assert.match(main, /CITY_PREFS = "eclipse_city"/);
+  assert.match(main, /\.edit\(\)\.putString\(CITY_KEY, text\)\.commit\(\)/, 'ok is sent only after the write');
+  assert.match(main, /KeptCity\.check\(/);
+  // Both editions handle the messages: the alarm-free bridge never refuses them.
+  assert.match(read(`${KT}/web/AlarmFreeBridge.kt`), /is BridgeMessage\.GetCity, is BridgeMessage\.SetCity -> Action\.HANDLE/);
+  assert.doesNotMatch(main.slice(main.indexOf('private fun getCity'), main.indexOf('/** A message to the page')), /Edition\.ALARMS/);
+  for (const f of ['backup_rules.xml', 'data_extraction_rules.xml']) assert.match(read(`android/app/src/main/res/xml/${f}`), /domain="root"/, f);
+});
+
+test('2.1.0: the planner notes name what the app keeps, in the words Marcos approved (DRAFT until he signs)', () => {
+  const ts = read(BRIDGE_TS);
+  assert.ok(ts.includes("KEEPS: 'EclipseTracker sends nothing. It keeps only the ringing alarms you set, the city you choose, if any, and the last file you added to your calendar, which it deletes when the app next starts afresh.'"));
+  assert.ok(ts.includes("PLAY_KEEPS: 'EclipseTracker sends nothing. It keeps only the city you choose, if any, and the last file you added to your calendar, which it deletes when the app next starts afresh.'"));
+  // The page's own lines for the city card in the app: the one the app now makes true, and the one it never shows.
+  const app = read('ts/app.ts');
+  assert.ok(app.includes("'Your city stays on this phone only. Clear it with the Clear city button.'"));
+  assert.ok(app.includes("'Your city stays on this phone and is forgotten when the app closes.'"));
+});
+
+/** The names in a Kotlin `listOf(...)` of strings, with its comments left out. */
+function stringsOf(source: string, from: string): string[] {
+  const start = source.indexOf(from);
+  assert.ok(start >= 0, from);
+  const body = group(/listOf\(([\s\S]*?)\n {4}\)/, source.slice(start));
+  return [...body.replace(/\/\/.*$/gm, '').matchAll(/"([^"]+)"/g)].map((m) => m[1] ?? '');
+}
+
+test('the release workflow expects exactly the web files WebAssets.INCLUDES copies (cities.js was missing from the workflow in 2.1.0 work)', () => {
+  const gradle = read('android/app/build.gradle.kts');
+  const includes = stringsOf(gradle, 'val INCLUDES = listOf(');
+  assert.ok(includes.includes('cities.js'), 'WebAssets.INCLUDES has cities.js');
+  const leftOutBlock = group(/val LEFT_OUT = mapOf\(([\s\S]*?)\n {4}\)/, gradle);
+  const leftOut = [...leftOutBlock.matchAll(/"([^"]+)" to /g)].map((m) => m[1] ?? '');
+  const workflow = read('.github/workflows/android-release.yml');
+  const loop = group(/EXPECTED_WEB=\$\(cd \.\. && for f in ([\s\S]*?); do\n([\s\S]*?)\n\s*done/, workflow);
+  const listed = loop.replace(/\\\n/g, ' ').split(/\s+/).filter(Boolean);
+  const skipped = group(/case "\$f" in ([^)]*)\) continue ;; esac/, workflow, 1).split('|');
+  assert.deepEqual([...listed].sort(), [...includes].sort(), 'the workflow lists the include list');
+  // What the workflow skips is what LEFT_OUT leaves out of a glob (CNAME and robots.txt are not in any glob).
+  assert.deepEqual([...skipped].sort(), leftOut.filter((f) => f.startsWith('core/')).sort());
+  assert.ok(includes.every((f) => !f.startsWith('/') && !f.includes('..')));
+  // The Gradle test inputs name the new vector files and the catalogue, so a change to them reruns the tests.
+  assert.match(gradle, /tests\/city-record-vectors\.json/);
+  assert.match(gradle, /tests\/stored-city-vectors\.json/);
+});
+
+test('2.1.0: the version, the third-party text and the catalogue credit', () => {
+  const gradle = read('android/app/build.gradle.kts');
+  assert.match(gradle, /\n {8}versionCode = 20100\n {8}versionName = "2\.1\.0"\n/);
+  assert.match(gradle, /GeoNames and from Kartverket/);
+  assert.match(gradle, /Five Millennium Canons/);
+  assert.doesNotMatch(gradle, /which is in the public domain/);
+  assert.ok(read('LICENSE').includes('GeoNames city data (cities.js)'));
+  assert.ok(read('LICENSE').includes("Kartverket's Sentralt stedsnavnregister"));
+  // The release notes exist for this code, and the Zapstore release text is the same file.
+  const notes = read('fastlane/metadata/android/en-US/changelogs/20100.txt');
+  assert.ok(notes.length < 500, `${notes.length} characters`);
+  assert.match(read('zapstore.yaml'), /release_notes: \.\/fastlane\/metadata\/android\/en-US\/changelogs\/20100\.txt/);
+  assert.doesNotMatch(notes, /[–—!]|--/);
+});
